@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -158,4 +157,3 @@ if st.session_state.running:
 
     # Auto refresh
     st.experimental_rerun()
-```
