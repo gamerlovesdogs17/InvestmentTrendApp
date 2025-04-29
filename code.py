@@ -133,6 +133,5 @@ with col_sig:
     st.markdown("### Signal & Market")
     if sig=='BUY': st.success(sig)
     elif sig=='SELL': st.error(sig)
-    else: st.warning(sig)
-        status_str = f"{get_market_status()} -------- {get_24h_status()}"
+    else: st.warning(sig)        status_str = f"{get_market_status()} -------- {get_24h_status()}" f"{get_market_status()} -------- {get_24h_status()}"
     st.info(status_str)
