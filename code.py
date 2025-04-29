@@ -23,7 +23,6 @@ def get_intraday(ticker):
 
 @st.cache_data
 def compute_indicators(df):
-    # if not enough data, fill with NaN
     if len(df) < 2:
         for col in ("Trend","BB_mid","BB_std","BB_upper","BB_lower","RSI"):
             df[col] = np.nan
@@ -35,40 +34,40 @@ def compute_indicators(df):
 
     df["BB_mid"]   = df["Close"].rolling(20).mean()
     df["BB_std"]   = df["Close"].rolling(20).std()
-    df["BB_upper"] = df["BB_mid"] + 2*df["BB_std"]
-    df["BB_lower"] = df["BB_mid"] - 2*df["BB_std"]
+    df["BB_upper"] = df["BB_mid"] + 2 * df["BB_std"]
+    df["BB_lower"] = df["BB_mid"] - 2 * df["BB_std"]
 
     delta = df["Close"].diff()
     up    = delta.clip(lower=0)
     down  = -delta.clip(upper=0)
     ma_up   = up.ewm(span=14, adjust=False).mean()
     ma_down = down.ewm(span=14, adjust=False).mean()
-    rs = ma_up/ma_down
-    df["RSI"] = 100 - (100/(1+rs))
+    rs = ma_up / ma_down
+    df["RSI"] = 100 - (100 / (1 + rs))
 
     return df
 
 def detect_pattern(df):
     closes = df["Close"].values
-    hi = np.where((closes>np.roll(closes,1)) & (closes>np.roll(closes,-1)))[0]
-    lo = np.where((closes<np.roll(closes,1)) & (closes<np.roll(closes,-1)))[0]
+    hi = np.where((closes > np.roll(closes,1)) & (closes > np.roll(closes,-1)))[0]
+    lo = np.where((closes < np.roll(closes,1)) & (closes < np.roll(closes,-1)))[0]
 
     # Double top
-    if len(hi)>=2:
-        h1,h2 = hi[-2],hi[-1]
-        if abs(closes[h1]-closes[h2])/closes[h1]<0.01:
+    if len(hi) >= 2:
+        h1,h2 = hi[-2], hi[-1]
+        if abs(closes[h1] - closes[h2]) / closes[h1] < 0.01:
             return "Double top", h2
 
     # Triple top
-    if len(hi)>=3:
-        h1,h2,h3 = hi[-3],hi[-2],hi[-1]
+    if len(hi) >= 3:
+        h1,h2,h3 = hi[-3], hi[-2], hi[-1]
         ref = closes[h1]
-        if all(abs(closes[h]-ref)/ref<0.01 for h in (h2,h3)):
+        if all(abs(closes[h] - ref)/ref < 0.01 for h in (h2,h3)):
             return "Triple top", h3
 
     # Head & Shoulders
-    if len(hi)>=3:
-        l,m,r = closes[hi[-3]],closes[hi[-2]],closes[hi[-1]]
+    if len(hi) >= 3:
+        l,m,r = closes[hi[-3]], closes[hi[-2]], closes[hi[-1]]
         if m>l and m>r and abs(l-r)/l<0.02:
             return "Head & shoulders", hi[-2]
 
@@ -81,19 +80,19 @@ def detect_pattern(df):
 
     # Inverse H&S
     if len(lo)>=3:
-        l,m,r = closes[lo[-3]],closes[lo[-2]],closes[lo[-1]]
+        l,m,r = closes[lo[-3]], closes[lo[-2]], closes[lo[-1]]
         if m<l and m<r and abs(l-r)/l<0.02:
             return "Inverse H&S", lo[-2]
 
     # Double bottom
     if len(lo)>=2:
-        b1,b2 = lo[-2],lo[-1]
+        b1,b2 = lo[-2], lo[-1]
         if abs(closes[b1]-closes[b2])/closes[b1]<0.01:
             return "Double bottom", b2
 
     # Unique three river
     if len(lo)>=3:
-        l,m,r = closes[lo[-3]],closes[lo[-2]],closes[lo[-1]]
+        l,m,r = closes[lo[-3]], closes[lo[-2]], closes[lo[-1]]
         if l>m<r:
             return "Unique three river", lo[-1]
 
@@ -116,47 +115,51 @@ def get_market_status():
 
 def get_24h_status():
     now = datetime.now(pytz.timezone("US/Eastern"))
-    # Sunday 8pm ET – Friday 8pm ET open
     if (now.weekday()==6 and now.hour>=20) or now.weekday()<4 or (now.weekday()==4 and now.hour<20):
         return "24h Markets Open"
     return "24h Markets Closed"
 
 st.title("📈 Intraday Trend & Pattern Scanner")
 
-# session state for toggling screens
 if "started" not in st.session_state:
     st.session_state.started = False
 
+# --- Settings Screen ---
 if not st.session_state.started:
     ticker      = st.text_input("Ticker", "AAPL").upper()
     rsi_on      = st.checkbox("Show RSI", True)
     bb_on       = st.checkbox("Show Bollinger Bands", True)
     refresh_min = st.slider("Refresh every N minutes", 1, 5, 1)
+
     if st.button("Start Chart"):
         st.session_state.started = True
-        st.session_state.ticker = ticker
+        st.session_state.ticker  = ticker
         st.session_state.rsi_on  = rsi_on
         st.session_state.bb_on   = bb_on
         st.session_state.refresh = refresh_min
+
     st.stop()
 
-# --- chart screen ---
-ticker   = st.session_state.ticker
-rsi_on   = st.session_state.rsi_on
-bb_on    = st.session_state.bb_on
-refresh  = st.session_state.refresh
+# --- Chart Screen ---
+ticker  = st.session_state.ticker
+rsi_on  = st.session_state.rsi_on
+bb_on   = st.session_state.bb_on
+refresh = st.session_state.refresh
 
 if st.button("← Back to Settings"):
     st.session_state.started = False
-    st.experimental_rerun()  # on very new Streamlit this may no longer exist
+    try:
+        st.experimental_rerun()
+    except AttributeError:
+        st.stop()
 
 try:
-    df     = get_intraday(ticker)
-    df     = compute_indicators(df)
-    pattern, pat_idx = detect_pattern(df)
-    first  = float(df["Close"].iloc[0])
-    last   = float(df["Close"].iloc[-1])
-    sig    = (
+    df          = get_intraday(ticker)
+    df          = compute_indicators(df)
+    pattern, _  = detect_pattern(df)
+    first       = float(df["Close"].iloc[0])
+    last        = float(df["Close"].iloc[-1])
+    sig         = (
         "BUY"  if last > df["Trend"].iloc[-1] else
         "SELL" if last < df["Trend"].iloc[-1] else
         "HOLD"
@@ -181,7 +184,7 @@ with col1:
     """, unsafe_allow_html=True)
 
 with col2:
-    fig, (ax1, ax2) = plt.subplots(2,1, figsize=(12,6), sharex=True,
+    fig, (ax1, ax2) = plt.subplots(2,1, figsize=(14,6), sharex=True,
                                    gridspec_kw={"height_ratios":[2,1]})
     color = "green" if last>=first else "red"
     ax1.plot(df.index, df["Close"], color=color, label="Price")
@@ -202,7 +205,7 @@ with col2:
 
     plt.xticks(rotation=30)
     plt.tight_layout(pad=2)
-    st.pyplot(fig)
+    st.pyplot(fig, use_container_width=True)
 
     next_in = refresh*60 - (datetime.now().second % (refresh*60))
     st.markdown(f"*Last refresh:* {datetime.now():%H:%M:%S} — *next in* {next_in//60} min")
