@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from datetime import datetime, time
 import pytz
 
-# ----- force a full rerun (Streamlit 1.45+)
+# ----- full‐page rerun shim for Streamlit 1.45+ ------------------------------
 try:
     from streamlit.runtime.scriptrunner.script_runner import RerunException
     def rerun():
@@ -15,8 +15,7 @@ except ImportError:
     def rerun():
         st.experimental_rerun()
 
-
-# ----- data & indicator funcs -----------------------------------------------
+# ----- data & indicators ------------------------------------------------------
 
 @st.cache_data(ttl=60)
 def get_intraday(ticker: str) -> pd.DataFrame:
@@ -51,15 +50,14 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
 def detect_pattern(df: pd.DataFrame) -> tuple[str, int | None]:
     """
     Stub for eight patterns:
-      Head&Shoulders, Double Top, Triple Top, Rising Wedge,
-      Inverse H&S, Double Bottom, Unique Three River, Falling Wedge.
+      Head & Shoulders, Double Top, Triple Top, Rising Wedge,
+      Inverse Head & Shoulders, Double Bottom, Unique Three River, Falling Wedge.
     Returns (name, index_of_pattern_start) or ("None", None).
     """
-    # TODO: replace with real detection
+    # → your real detection code goes here
     return "None", None
 
-
-# ----- market status funcs --------------------------------------------------
+# ----- market status ----------------------------------------------------------
 
 def get_market_status() -> str:
     eastern = pytz.timezone("US/Eastern")
@@ -74,17 +72,16 @@ def get_24h_status() -> str:
     eastern = pytz.timezone("US/Eastern")
     now = datetime.now(eastern)
     wd, t = now.weekday(), now.time()
-    # 24h for some stocks: Sun 20:00 ET → Fri 20:00 ET
-    if wd < 4:  # Mon–Thu
+    # 24h market window: Sun 20:00 ET → Fri 20:00 ET
+    if wd < 4:
         return "Open"
-    if wd == 4:  # Fri
+    if wd == 4:
         return "Open" if t < time(20,0) else "Closed"
-    if wd == 6:  # Sun
+    if wd == 6:
         return "Open" if t >= time(20,0) else "Closed"
     return "Closed"
 
-
-# ----- session state init ---------------------------------------------------
+# ----- session_state init ----------------------------------------------------
 
 if "started" not in st.session_state:
     st.session_state.started = False
@@ -97,26 +94,24 @@ if "bb_on" not in st.session_state:
 if "refresh" not in st.session_state:
     st.session_state.refresh = 1
 
-
-# ----- SETTINGS SCREEN ------------------------------------------------------
+# ----- SETTINGS SCREEN -------------------------------------------------------
 
 if not st.session_state.started:
     st.title("📈 Intraday Trend & Pattern Scanner")
-    ticker_input = st.text_input("Ticker (e.g. AAPL)", st.session_state.ticker)
-    rsi_input    = st.checkbox("Show RSI", st.session_state.rsi_on)
-    bb_input     = st.checkbox("Show Bollinger Bands", st.session_state.bb_on)
-    refresh_input= st.slider("Refresh every N minutes", 1, 5, st.session_state.refresh)
+    t_input  = st.text_input("Ticker (e.g. AAPL)", st.session_state.ticker)
+    r_input  = st.checkbox("Show RSI", st.session_state.rsi_on)
+    bb_input = st.checkbox("Show Bollinger Bands", st.session_state.bb_on)
+    rf_input = st.slider("Refresh every N minutes", 1, 5, st.session_state.refresh)
 
     if st.button("▶️ Start Chart"):
-        st.session_state.ticker  = ticker_input.upper()
-        st.session_state.rsi_on  = rsi_input
+        st.session_state.ticker  = t_input.upper()
+        st.session_state.rsi_on  = r_input
         st.session_state.bb_on   = bb_input
-        st.session_state.refresh = refresh_input
+        st.session_state.refresh = rf_input
         st.session_state.started = True
         rerun()
 
-
-# ----- CHART SCREEN ---------------------------------------------------------
+# ----- CHART SCREEN ----------------------------------------------------------
 
 else:
     st.title("📈 Intraday Trend & Pattern Scanner")
@@ -139,19 +134,19 @@ else:
     first = float(df["Close"].iloc[0])
     last  = float(df["Close"].iloc[-1])
 
-    # ——— plot ——————————————————————————————————————————————————————
+    # — plot —
     fig, (ax1, ax2) = plt.subplots(2,1, figsize=(14,6), sharex=True)
-    price_color = "green" if last >= first else "red"
-    ax1.plot(df.index, df["Close"], color=price_color, label="Price", linewidth=1)
-    ax1.plot(df.index, df["Trend"],    "--",       label="Trend", linewidth=1)
+    price_col = "green" if last >= first else "red"
+    ax1.plot(df.index, df["Close"], color=price_col, label="Price")
+    ax1.plot(df.index, df["Trend"], "--", label="Trend")
     if bb_on:
-        ax1.plot(df.index, df["BollingerUpper"], ":", label="Boll Upper", linewidth=1)
-        ax1.plot(df.index, df["BollingerLower"], ":", label="Boll Lower", linewidth=1)
+        ax1.plot(df.index, df["BollingerUpper"], ":", label="Boll Upper")
+        ax1.plot(df.index, df["BollingerLower"], ":", label="Boll Lower")
     ax1.set_ylabel("Price (USD)")
     ax1.legend(loc="upper left", fontsize="small")
 
     if rsi_on:
-        ax2.plot(df.index, df["RSI"], color="orange", label="RSI", linewidth=1.2)
+        ax2.plot(df.index, df["RSI"], color="orange", label="RSI")
         ax2.axhline(70, "--", alpha=0.5)
         ax2.axhline(30, "--", alpha=0.5)
         ax2.set_ylabel("RSI")
@@ -159,35 +154,34 @@ else:
 
     st.pyplot(fig, use_container_width=True)
 
-    # ——— SIGNAL & STATUS PANELS —————————————————————————————————————
-    col1, col2 = st.columns([1,3])
-    with col1:
+    # — panels —
+    c1, c2 = st.columns([1,3])
+    with c1:
         sig = "BUY" if last > first else "SELL"
-        sig_color = "#0a0" if sig=="BUY" else "#a00"
+        col = "#0a0" if sig=="BUY" else "#a00"
         st.markdown(
-            f"<div style='background:{sig_color};color:#fff;padding:20px;text-align:center;"
+            f"<div style='background:{col};color:#fff;padding:20px;text-align:center;"
             f"font-size:24px;font-weight:bold;border-radius:4px'>{sig}</div>",
             unsafe_allow_html=True,
         )
 
-        mkt = get_market_status()
-        m24 = get_24h_status()
+        mkt  = get_market_status()
+        m24  = get_24h_status()
         st.markdown(
             "<div style='background:#112;color:#dde;padding:10px;border-radius:4px'>"
             f"⏰ {mkt}<br>─── 24h Markets {m24}</div>",
             unsafe_allow_html=True,
         )
 
-    with col2:
-        # trend panel
-        trend_text = "rising" if last >= first else "falling"
+    with c2:
+        trend_txt = "rising" if last >= first else "falling"
         st.markdown(
             "<div style='background:#023;color:#eef;padding:12px;border-radius:4px'>"
-            f"<strong>🌟 Trend Detected</strong><br>trend: price is {trend_text}."
+            f"<strong>🌟 Trend Detected</strong><br>trend: price is {trend_txt}."
             "</div>",
             unsafe_allow_html=True,
         )
-        # pattern panel
+
         link = "" if pattern=="None" else "🔗"
         st.markdown(
             "<div style='background:#432;color:#ffd;padding:12px;border-radius:4px'>"
@@ -198,9 +192,6 @@ else:
         )
 
     st.write(
-        f"*Last refresh:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} — "
+        f"*Last refresh:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} – "
         f"*next in {refresh} min*"
     )
-
-    # schedule auto‐refresh
-    # (Streamlit doesn’t support a native timer; you can use streamlit-autorefresh or JS)
