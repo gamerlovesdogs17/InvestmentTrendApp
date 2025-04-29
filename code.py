@@ -15,18 +15,29 @@ def get_intraday(ticker):
     return df
 
 def compute_indicators(df):
+    if df.empty or len(df) < 2:
+        # nothing to compute; bail out gracefully
+        df["Trend"]    = np.nan
+        df["BB_mid"]   = np.nan
+        df["BB_std"]   = np.nan
+        df["BB_upper"] = np.nan
+        df["BB_lower"] = np.nan
+        df["RSI"]      = np.nan
+        return df
+
     x = np.arange(len(df))
-    # linear trend: slope & intercept
+
+    # ── linear trend ────────────────────────────────────────────────
     slope, intercept = np.polyfit(x, df["Close"].values, 1)
     df["Trend"] = slope * x + intercept
 
-    # Bollinger Bands
-    df["BB_mid"] = df["Close"].rolling(20).mean()
-    df["BB_std"] = df["Close"].rolling(20).std()
+    # ── Bollinger Bands ─────────────────────────────────────────────
+    df["BB_mid"]   = df["Close"].rolling(20).mean()
+    df["BB_std"]   = df["Close"].rolling(20).std()
     df["BB_upper"] = df["BB_mid"] + 2 * df["BB_std"]
     df["BB_lower"] = df["BB_mid"] - 2 * df["BB_std"]
 
-    # RSI
+    # ── RSI ───────────────────────────────────────────────────────────
     delta   = df["Close"].diff()
     up      = delta.clip(lower=0)
     down    = -delta.clip(upper=0)
@@ -102,9 +113,11 @@ if st.session_state.get("started", False):
     df       = compute_indicators(df)
     pattern, idx = detect_pattern(df)
 
-    first, last = df["Close"].iloc[0], df["Close"].iloc[-1]
-    color       = "green" if last >= first else "red"
-    sig = "BUY" if last > df["Trend"].iloc[-1] else "SELL" if last < df["Trend"].iloc[-1] else "HOLD"
+    first, last = (np.nan, np.nan) if df.empty else (df["Close"].iloc[0], df["Close"].iloc[-1])
+    color       = "green" if last>=first else "red"
+    sig         = ("BUY"  if last>df["Trend"].iloc[-1]
+                   else "SELL" if last<df["Trend"].iloc[-1]
+                   else "HOLD")
 
     # ─── Plot ─────────────────────────────
     fig, (ax1, ax2) = plt.subplots(2,1, figsize=(12,6), sharex=True)
@@ -139,7 +152,6 @@ if st.session_state.get("started", False):
         elif sig=="SELL": st.error("SELL")
         else:             st.warning("HOLD")
 
-        # merged box
         st.info(f"{get_market_status()}  --------  {get_24h_status()}")
         st.write(f"Last refresh: {datetime.now().strftime('%H:%M:%S')} — next in {refresh} min")
 
