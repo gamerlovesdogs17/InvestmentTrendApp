@@ -54,7 +54,7 @@ def detect_pattern(prices):
         last3 = peaks[-3:]
         if np.std(s[last3])<0.01*np.mean(s[last3]):
             detections.append(('Triple top', last3[-1]))
-    # Inverse H&S
+    # Inverse Head & Shoulders
     if len(troughs)>=3:
         t1,t2,t3 = troughs[-3:]
         if s[t2]<s[t1] and s[t2]<s[t3] and abs(s[t1]-s[t3])<0.02*np.mean([s[t1],s[t3]]):
@@ -101,14 +101,12 @@ def get_market_status():
 
 # ----- 24h Market Status -----
 def get_24h_status():
-    # Stocks 24h schedule: open Sunday 20:00 ET → close Friday 20:00 ET
     eastern = pytz.timezone('US/Eastern')
     now_et = datetime.now(eastern)
     wd = now_et.weekday()
     ct = now_et.time()
     close_sun = time(20,0)
     close_fri = time(20,0)
-    # Friday after 20:00 to Sunday before 20:00 = closed
     if (wd==4 and ct>=close_fri) or wd==5 or (wd==6 and ct<close_sun):
         return '24h Markets Closed'
     return '24h Markets Open'
@@ -139,37 +137,38 @@ if st.button("Stop Chart"):
 
 st_autorefresh(interval=st.session_state.refresh*60*1000,key='auto')
 
-# Fetch
+# Fetch Data
 try:
     df = fetch_data(st.session_state.symbol)
 except Exception as e:
     st.error(e)
     st.stop()
 
-cl = df['Close']; tm = df.index
-first, last = cl.iloc[0], cl.iloc[-1]
+cl = df['Close']
+tm = df.index
+first = float(cl.iloc[0])
+last = float(cl.iloc[-1])
 
-# Trend
 i = np.arange(len(cl))
 mt, bt = np.polyfit(i,cl.values,1)
 trend = mt>0 and 'Uptrend' or 'Downtrend'
 trend_msg = f"Detected trend: price is {'rising' if mt>0 else 'falling'}."
 
-# Pattern & Signal
 pat = detect_pattern(cl)
 pat_name = pat or 'None'
 pat_msg = pat and f"Detected pattern: {pat}." or "No recognizable chart pattern detected."
 bull = ['Inverse head and shoulders','Double bottom','Unique three river','Falling wedge']
 bear = ['Head and shoulders','Double top','Triple top','Rising wedge']
-if pat in bull: sig='BUY'
-elif pat in bear: sig='SELL'
-else: sig = last>first and 'BUY' or last<first and 'SELL' or 'HOLD'
+if pat in bull:
+    sig = 'BUY'
+elif pat in bear:
+    sig = 'SELL'
+else:
+    sig = last>first and 'BUY' or last<first and 'SELL' or 'HOLD'
 
-# Indicators
 ub, lb = (compute_bollinger(cl) if st.session_state.show_boll else (None,None))
 rsi = compute_rsi(cl) if st.session_state.show_rsi else None
 
-# Layout
 col_sig,col_chart,col_info = st.columns([1.5,4,2.5])
 with col_sig:
     st.markdown("### Signal")
@@ -183,6 +182,36 @@ with col_sig:
 
 with col_chart:
     fig, (ax1,ax2) = plt.subplots(2,1,figsize=(12,8),sharex=True)
-    # choose color based on daily change
-color = 'green' if float(last) >= float(first) else 'red'
-ax1.plot(tm, cl, color=color, label='Price')
+    # Fixed price color assignment
+    color = 'green' if last>=first else 'red'
+    ax1.plot(tm, cl, color=color, label='Price')
+    ax1.plot(tm, mt*i+bt, '--', color='orange', label='Trend')
+    if st.session_state.show_boll:
+        ax1.plot(tm, ub, '--', alpha=0.5, label='Boll Upper')
+        ax1.plot(tm, lb, '--', alpha=0.5, label='Boll Lower')
+    ax1.set_title(f"{st.session_state.symbol} – Daily Change: {last-first:+.2f}")
+    ax1.set_ylabel('Price (USD)')
+    ax1.grid(True)
+    ax1.legend()
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+    ax1.tick_params(axis='x', rotation=45)
+    if rsi is not None:
+        ax2.plot(tm, rsi, label='RSI')
+        ax2.axhline(70, linestyle='--', alpha=0.3)
+        ax2.axhline(30, linestyle='--', alpha=0.3)
+        ax2.set_ylabel('RSI')
+        ax2.grid(True)
+        ax2.legend()
+        ax2.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+        ax2.tick_params(axis='x', rotation=45)
+    else:
+        ax2.axis('off')
+    plt.tight_layout()
+    st.pyplot(fig)
+    st.markdown(f"Last refresh: {pd.Timestamp.now().strftime('%H:%M:%S')} — next in {st.session_state.refresh} min")
+
+with col_info:
+    st.markdown('### Trend Info')
+    st.info(f"**{trend}**\n{trend_msg}")
+    st.markdown('### Pattern Info')
+    st.warning(f"**{pat_name}**\n{pat_msg}")
