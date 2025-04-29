@@ -6,9 +6,6 @@ import matplotlib.pyplot as plt
 from streamlit_autorefresh import st_autorefresh
 import time
 
-# Page config
-st.set_page_config(layout="wide", page_title="Investment Trend App")
-
 # --- Data Functions ---
 @st.cache_data
 def fetch_data(ticker, period="1d", interval="1m"):
@@ -41,7 +38,7 @@ if 'symbol' not in st.session_state:
 
 # --- Input Screen ---
 if not st.session_state.started:
-    st.title("📈 Investment Trend App")
+    st.title("Investment Trend App")
     symbol_input = st.text_input("Enter stock ticker:", value="AAPL").upper()
     show_rsi_input = st.checkbox("Show RSI", value=True)
     show_boll_input = st.checkbox("Show Bollinger Bands", value=True)
@@ -77,13 +74,6 @@ except Exception as e:
 closes = df['Close']
 times  = df.index
 
-# Convert to native floats
-first  = closes.iloc[0].item()
-last   = closes.iloc[-1].item()
-
-# Determine price color
-color = 'green' if last >= first else 'red'
-
 # Trend line
 x = np.arange(len(closes))
 m, b = np.polyfit(x, closes.values, 1)
@@ -96,33 +86,19 @@ else:
     upper = lower = None
 
 # RSI
-rsi = compute_rsi(closes) if show_rsi else None
+if show_rsi:
+    rsi = compute_rsi(closes)
+else:
+    rsi = None
 
 # Plotting
 fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
 
-# Main price + trend
-ax1.plot(times, closes, color=color, label='Price', linewidth=2)
-ax1.plot(times, trend, '--', color='orange', label='Trend')
+# Price and Trend
+ax1.plot(times, closes, label='Price', linewidth=2)
+ax1.plot(times, trend, '--', label='Trend')
 if show_boll:
-    ax1.plot(times, upper, '--', color='gray', alpha=0.5, label='Bollinger Upper')
-    ax1.plot(times, lower, '--', color='gray', alpha=0.5, label='Bollinger Lower')
-ax1.set_title(f"{symbol} • Day Change: {last-first:+.2f}")
-ax1.set_ylabel("Price (USD)")
-ax1.legend()
-ax1.grid(True, linestyle='--', alpha=0.5)
-
-# RSI subplot
-if show_rsi and rsi is not None:
-    ax2.plot(times, rsi, color='purple', label='RSI')
-    ax2.axhline(70, '--', color='red', alpha=0.3)
-    ax2.axhline(30, '--', color='green', alpha=0.3)
-    ax2.set_ylabel('RSI')
-    ax2.legend()
-    ax2.grid(True, linestyle='--', alpha=0.5)
-else:
-    ax2.axis('off')
-
-plt.tight_layout()
-st.pyplot(fig)
-st.markdown(f"**Last refresh:** {pd.Timestamp.now().strftime('%H:%M:%S')} — next in {refresh_rate} min")
+    ax1.plot(times, upper, '--', alpha=0.5, label='Bollinger Upper')
+    ax1.plot(times, lower, '--', alpha=0.5, label='Bollinger Lower')
+ax1.set_title(f"{symbol} • Day Change: {closes.iloc[-1] - closes.iloc[0]:+.2f}")
+ax1.set_ylabe
