@@ -73,6 +73,8 @@ except Exception as e:
 
 closes = df['Close']
 times  = df.index
+first  = closes.iloc[0].item()
+last   = closes.iloc[-1].item()
 
 # Trend line
 x = np.arange(len(closes))
@@ -94,11 +96,28 @@ else:
 # Plotting
 fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
 
-# Price and Trend
-ax1.plot(times, closes, label='Price', linewidth=2)
+# Price & Trend
+ax1.plot(times, closes, label='Price')
 ax1.plot(times, trend, '--', label='Trend')
 if show_boll:
     ax1.plot(times, upper, '--', alpha=0.5, label='Bollinger Upper')
     ax1.plot(times, lower, '--', alpha=0.5, label='Bollinger Lower')
-ax1.set_title(f"{symbol} • Day Change: {closes.iloc[-1] - closes.iloc[0]:+.2f}")
-ax1.set_ylabe
+ax1.set_title(f"{symbol} – Change: {last-first:+.2f}")
+ax1.set_ylabel("Price (USD)")
+ax1.legend()
+ax1.grid(True)
+
+# RSI subplot
+if show_rsi and rsi is not None:
+    ax2.plot(times, rsi, label='RSI')
+    ax2.axhline(70, '--', alpha=0.3)
+    ax2.axhline(30, '--', alpha=0.3)
+    ax2.set_ylabel('RSI')
+    ax2.legend()
+    ax2.grid(True)
+else:
+    ax2.axis('off')
+
+plt.tight_layout()
+st.pyplot(fig)
+st.markdown(f"Last refresh: {pd.Timestamp.now().strftime('%H:%M:%S')} (next in {refresh_rate} min)")
