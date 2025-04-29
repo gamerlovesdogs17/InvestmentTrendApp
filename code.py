@@ -45,78 +45,47 @@ if not st.session_state.started:
     show_boll = st.checkbox("Show Bollinger Bands", value=True)
     refresh_rate = st.slider("Refresh every N minutes", 1, 5, 1)
 
-    if st.button("Start Chart") and symbol:
-        st.session_state.started = True
-        st.session_state.symbol = symbol
-        st.session_state.show_rsi = show_rsi
-        st.session_state.show_boll = show_boll
-        st.session_state.refresh = refresh_rate
-        st.experimental_rerun()
+    if st.button("Start Chart"):
+    st.session_state.started = True
+    st.session_state.symbol = symbol
+    st.session_state.show_rsi = show_rsi
+    st.session_state.show_boll = show_boll
+    st.session_state.refresh = refresh_rate
+    st.experimental_rerun()
 else:
-    # Sidebar toggles
+    # After Start Chart, Show Stop button in sidebar
     st.sidebar.title("Controls")
+    stop = st.sidebar.button("Stop Chart")
     show_rsi = st.sidebar.checkbox("Show RSI", value=st.session_state.show_rsi)
     show_boll = st.sidebar.checkbox("Show Bollinger Bands", value=st.session_state.show_boll)
     refresh_rate = st.sidebar.slider("Refresh every N minutes", 1, 5, st.session_state.refresh)
-
     symbol = st.session_state.symbol
     placeholder = st.empty()
     cycle = 1
 
-    try:
-        while True:
-            df = fetch_data(symbol)
-            closes = df['Close']
-            times = df.index
+    while not stop:
+        df = fetch_data(symbol)
+        closes = df['Close']
+        times = df.index
 
-            # Determine color based on daily change
-            first_price = closes.iloc[0]
-            last_price = closes.iloc[-1]
-            price_color = 'green' if last_price >= first_price else 'red'
+        first_price = closes.iloc[0]
+        last_price = closes.iloc[-1]
+        price_color = 'green' if last_price >= first_price else 'red'
 
-            # Compute trend line
-            x = np.arange(len(closes))
-            y = closes.values
-            m, b = np.polyfit(x, y, 1)
-            trend = m * x + b
+        x = np.arange(len(closes))
+        y = closes.values
+        m, b = np.polyfit(x, y, 1)
+        trend = m * x + b
 
-            # Bollinger Bands
-            if show_boll:
-                upper, lower = compute_bollinger(closes)
+        if show_boll:
+            upper, lower = compute_bollinger(closes)
 
-            # RSI
-            if show_rsi:
-                rsi = compute_rsi(closes)
+        if show_rsi:
+            rsi = compute_rsi(closes)
 
-            # Build figure
-            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
-            # Price & Trend
-            ax1.plot(times, closes, label='Price', color=price_color, linewidth=2)
-            ax1.plot(times, trend, linestyle='--', label='Trend', color='orange')
-            if show_boll:
-                ax1.plot(times, upper, linestyle='--', color='gray', alpha=0.5, label='Bollinger Upper')
-                ax1.plot(times, lower, linestyle='--', color='gray', alpha=0.5, label='Bollinger Lower')
-            ax1.set_title(f"{symbol} • Daily Change: {last_price-first_price:+.2f}")
-            ax1.set_ylabel("Price (USD)")
-            ax1.legend()
-            ax1.grid(True, linestyle='--', alpha=0.5)
-
-            # RSI subplot
-            if show_rsi:
-                ax2.plot(times, rsi, color='purple', label='RSI')
-                ax2.axhline(70, color='red', linestyle='--', alpha=0.3)
-                ax2.axhline(30, color='green', linestyle='--', alpha=0.3)
-                ax2.set_ylabel('RSI')
-                ax2.set_xlabel('Time')
-                ax2.legend()
-                ax2.grid(True, linestyle='--', alpha=0.5)
-            else:
-                ax2.axis('off')
-
-            plt.tight_layout()
-            placeholder.pyplot(fig)
-            st.markdown(f"**Refresh #{cycle}** — Next update in {refresh_rate} minute(s)")
-            cycle += 1
-            time.sleep(refresh_rate * 60)
-    except KeyboardInterrupt:
-        st.experimental_rerun()
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+        ax1.plot(times, closes, label='Price', color=price_color, linewidth=2)
+        ax1.plot(times, trend, linestyle='--', label='Trend', color='orange')
+        if show_boll:
+            ax1.plot(times, upper, linestyle='--', color='gray', alpha=0.5, label='Bollinger Upper')
+            ax1.plot
