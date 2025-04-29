@@ -134,34 +134,5 @@ with col_sig:
     if sig=='BUY': st.success(sig)
     elif sig=='SELL': st.error(sig)
     else: st.warning(sig)
-    st.info(f"{get_market_status()} -------- {get_24h_status()}")()}")
-
-with col_chart:
-    fig, (ax1,ax2) = plt.subplots(2,1,figsize=(14,8), sharex=True)
-    color = 'green' if last>=first else 'red'
-    ax1.plot(tm, cl, color=color, label='Price')
-    ax1.plot(tm, mt*i+bt, '--', color='orange', label='Trend')
-    if st.session_state.show_boll:
-        ax1.plot(tm, ub, '--', alpha=0.5, label='Boll Upper')
-        ax1.plot(tm, lb, '--', alpha=0.5, label='Boll Lower')
-    ax1.set_title(f"{st.session_state.symbol} – Daily Change: {last-first:+.2f}")
-    ax1.set_ylabel('Price (USD)')
-    ax1.legend(); ax1.grid(True)
-    ax1.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
-    ax1.tick_params(axis='x', rotation=45)
-    if rsi is not None:
-        ax2.plot(tm, rsi, label='RSI')
-        ax2.axhline(70, linestyle='--', alpha=0.3)
-        ax2.axhline(30, linestyle='--', alpha=0.3)
-        ax2.set_ylabel('RSI'); ax2.legend(); ax2.grid(True)
-        ax2.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
-        ax2.tick_params(axis='x', rotation=45)
-    else:
-        ax2.axis('off')
-    plt.tight_layout(); st.pyplot(fig)
-    st.markdown(f"Last refresh: {pd.Timestamp.now().strftime('%H:%M:%S')} — next in {st.session_state.refresh} min")
-
-with col_info:
-    st.markdown('### Info Panels')
-    st.info(f"**{trend}**\n{trend_msg}")
-    st.warning(f"**{pat_name}**\n{pat_msg}")
+        status_str = f"{get_market_status()} -------- {get_24h_status()}"
+    st.info(status_str)
