@@ -1,6 +1,6 @@
-streamlit>=1.20.0
+streamlit
 yfinance
 pandas
 numpy
 matplotlib
-streamlit-autorefresh
+pytz
