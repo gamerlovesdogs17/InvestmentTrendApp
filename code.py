@@ -12,14 +12,20 @@ from streamlit_autorefresh import st_autorefresh
 
 @st.cache_data(ttl=60)
 def get_intraday(ticker: str) -> pd.DataFrame:
-    df = (yf.download(ticker, period="1d", interval="1m", progress=False)
-            .dropna())
+    df = (
+        yf.download(ticker, period="1d", interval="1m", progress=False)
+          .dropna()
+    )
     return df
 
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    # must have at least two points to fit trend
+    if len(df) < 2:
+        return df
     x = np.arange(len(df))
     slope, intercept = np.polyfit(x, df["Close"].values, 1)
     df["Trend"]    = slope * x + intercept
+
     m = df["Close"].rolling(20).mean()
     s = df["Close"].rolling(20).std()
     df["BB_upper"] = m + 2*s
@@ -30,19 +36,20 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     loss     = -delta.clip(upper=0)
     avg_gain = gain.rolling(14).mean()
     avg_loss = loss.rolling(14).mean()
-    rs       = avg_gain/avg_loss
+    rs       = avg_gain / avg_loss
     df["RSI"] = 100 - (100/(1+rs))
 
     return df
 
 def detect_pattern(df: pd.DataFrame):
     c     = df["Close"].values
-    peaks = np.argwhere((c[1:-1]>c[:-2]) & (c[1:-1]>c[2:])).flatten() + 1
+    # find local peaks
+    peaks = np.argwhere((c[1:-1] > c[:-2]) & (c[1:-1] > c[2:])).flatten() + 1
     if len(peaks) >= 3:
         return "Triple top", peaks[-1]
     if len(peaks) == 2:
         return "Double top", peaks[-1]
-    return "None", len(df)-1
+    return "None", len(df) - 1
 
 def get_market_status(now=None):
     tz  = pytz.timezone("US/Eastern")
@@ -51,9 +58,9 @@ def get_market_status(now=None):
     t   = now.time()
     if wd >= 5:
         return "Closed"
-    if t < datetime.strptime("09:30","%H:%M").time():
+    if t < datetime.strptime("09:30", "%H:%M").time():
         return "Pre-Market"
-    if t < datetime.strptime("16:00","%H:%M").time():
+    if t < datetime.strptime("16:00", "%H:%M").time():
         return "Open Trading"
     return "After Hours"
 
@@ -68,16 +75,15 @@ def get_24h_status(now=None):
 
 # --- SESSION STATE DEFAULTS ------------------------------------------------
 
-defaults = {
+for key, val in {
     "started": False,
-    "ticker":   "",
-    "rsi_on":   True,
-    "bb_on":    True,
-    "refresh":  1
-}
-for k, v in defaults.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
+    "ticker":  "",
+    "rsi_on":  True,
+    "bb_on":   True,
+    "refresh": 1
+}.items():
+    if key not in st.session_state:
+        st.session_state[key] = val
 
 # --- PAGE LAYOUT ------------------------------------------------------------
 
@@ -93,8 +99,8 @@ if not st.session_state.started:
     ref_in    = st.slider("Refresh every N minutes", 1, 5, 1)
 
     if st.button("▶ Start Chart"):
-        if ticker_in.strip() == "":
-            st.error("Please enter a ticker symbol.")
+        if not ticker_in.strip():
+            st.error("Please enter a valid ticker.")
         else:
             st.session_state.update({
                 "ticker":  ticker_in,
@@ -110,18 +116,23 @@ else:
     if st.button("← Back to Settings"):
         st.session_state.started = False
 
-    # load inputs
     ticker  = st.session_state.ticker
     rsi_on  = st.session_state.rsi_on
     bb_on   = st.session_state.bb_on
     refresh = st.session_state.refresh
 
-    # fetch & compute
-    df        = get_intraday(ticker)
-    df        = compute_indicators(df)
+    df = get_intraday(ticker)
+    if df.empty:
+        st.error(f"No intraday data available for '{ticker}'.")
+        st.stop()
+    if len(df) < 2:
+        st.error("Not enough data points to compute indicators.")
+        st.stop()
+
+    df           = compute_indicators(df)
     pattern, idx = detect_pattern(df)
-    first     = float(df["Close"].iloc[0])
-    last      = float(df["Close"].iloc[-1])
+    first        = float(df["Close"].iloc[0])
+    last         = float(df["Close"].iloc[-1])
 
     # --- PLOT -------------------------------------------------------------
     fig, (ax1, ax2) = plt.subplots(
@@ -156,12 +167,12 @@ else:
     # --- SIGNAL & MARKET STATUS ------------------------------------------
     st.markdown("### Signal")
     trend_end = df["Trend"].iloc[-1]
-    sig       = ("BUY"  if last > trend_end else
-                 "SELL" if last < trend_end else "HOLD")
+    sig       = "BUY"  if last > trend_end else \
+                "SELL" if last < trend_end else "HOLD"
     sig_color = {"BUY":"green","SELL":"red","HOLD":"gold"}[sig]
     st.markdown(
         f"<div style='background:{sig_color};"
-        "padding:1em;color:white;text-align:center;"
+        "padding:0.8em;color:white;text-align:center;"
         f"font-size:1.5em'>{sig}</div>",
         unsafe_allow_html=True
     )
@@ -175,7 +186,7 @@ else:
     st.markdown("### Info Panels")
     trend_txt = "rising" if last >= first else "falling"
     st.markdown(f"#### 🌟 Trend Detected\ntrend: price is {trend_txt}.")
-    st.markdown(f"#### 🔍 Pattern Detected\npattern: {pattern}. (most recent at index {idx})")
+    st.markdown(f"#### 🔍 Pattern Detected\npattern: {pattern}. (at idx {idx})")
 
     # --- AUTO REFRESH ------------------------------------------------------
     now = datetime.now(pytz.timezone("US/Eastern")).strftime("%H:%M:%S")
