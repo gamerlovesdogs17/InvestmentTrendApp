@@ -134,7 +134,7 @@ with col_sig:
     if sig=='BUY': st.success(sig)
     elif sig=='SELL': st.error(sig)
     else: st.warning(sig)
-    st.info(f"{get_market_status()}\n{get_24h_status()}")
+    st.info(f"{get_market_status()} -------- {get_24h_status()}")()}")
 
 with col_chart:
     fig, (ax1,ax2) = plt.subplots(2,1,figsize=(14,8), sharex=True)
