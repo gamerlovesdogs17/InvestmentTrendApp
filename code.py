@@ -25,7 +25,6 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["BB_upper"] = m + 2*s
     df["BB_lower"] = m - 2*s
 
-    # RSI
     delta    = df["Close"].diff()
     gain     = delta.clip(lower=0)
     loss     = -delta.clip(upper=0)
@@ -38,19 +37,19 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 def detect_pattern(df: pd.DataFrame):
     c     = df["Close"].values
-    peaks = np.argwhere((c[1:-1]>c[:-2])&(c[1:-1]>c[2:])).flatten()+1
-    if len(peaks)>=3:
+    peaks = np.argwhere((c[1:-1]>c[:-2]) & (c[1:-1]>c[2:])).flatten() + 1
+    if len(peaks) >= 3:
         return "Triple top", peaks[-1]
-    if len(peaks)==2:
+    if len(peaks) == 2:
         return "Double top", peaks[-1]
     return "None", len(df)-1
 
 def get_market_status(now=None):
-    tz = pytz.timezone("US/Eastern")
+    tz  = pytz.timezone("US/Eastern")
     now = now or datetime.now(tz)
     wd  = now.weekday()
     t   = now.time()
-    if wd>=5:
+    if wd >= 5:
         return "Closed"
     if t < datetime.strptime("09:30","%H:%M").time():
         return "Pre-Market"
@@ -59,24 +58,24 @@ def get_market_status(now=None):
     return "After Hours"
 
 def get_24h_status(now=None):
-    tz = pytz.timezone("US/Eastern")
+    tz  = pytz.timezone("US/Eastern")
     now = now or datetime.now(tz)
-    wd  = now.weekday()
-    t   = now.time()
-    # 24h Markets close Fri 20:00ET → Sun 20:00ET
-    if wd==5 or (wd==4 and t>=datetime.strptime("20:00","%H:%M").time()):
+    wd, t = now.weekday(), now.time()
+    # 24h markets closed Fri 20:00 → Sun 20:00 ET
+    if wd == 5 or (wd == 4 and t >= datetime.strptime("20:00","%H:%M").time()):
         return "24h Closed"
     return "24h Open"
 
 # --- SESSION STATE DEFAULTS ------------------------------------------------
 
-for k,v in {
+defaults = {
     "started": False,
     "ticker":   "",
     "rsi_on":   True,
     "bb_on":    True,
     "refresh":  1
-}.items():
+}
+for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
@@ -94,8 +93,8 @@ if not st.session_state.started:
     ref_in    = st.slider("Refresh every N minutes", 1, 5, 1)
 
     if st.button("▶ Start Chart"):
-        if not ticker_in:
-            st.error("Enter a ticker to proceed.")
+        if ticker_in.strip() == "":
+            st.error("Please enter a ticker symbol.")
         else:
             st.session_state.update({
                 "ticker":  ticker_in,
@@ -104,35 +103,33 @@ if not st.session_state.started:
                 "refresh": ref_in,
                 "started": True
             })
-            st.experimental_rerun()
 
 # --- CHART SCREEN ----------------------------------------------------------
 
 else:
-    # back‐to‐settings
     if st.button("← Back to Settings"):
         st.session_state.started = False
-        st.experimental_rerun()
 
-    # load
+    # load inputs
     ticker  = st.session_state.ticker
     rsi_on  = st.session_state.rsi_on
     bb_on   = st.session_state.bb_on
     refresh = st.session_state.refresh
 
-    df       = get_intraday(ticker)
-    df       = compute_indicators(df)
+    # fetch & compute
+    df        = get_intraday(ticker)
+    df        = compute_indicators(df)
     pattern, idx = detect_pattern(df)
-    first    = float(df["Close"].iloc[0])
-    last     = float(df["Close"].iloc[-1])
+    first     = float(df["Close"].iloc[0])
+    last      = float(df["Close"].iloc[-1])
 
     # --- PLOT -------------------------------------------------------------
     fig, (ax1, ax2) = plt.subplots(
-        2,1, sharex=True, figsize=(14,7),
-        gridspec_kw={"height_ratios":[3,1]},
-        constrained_layout=True
+        2, 1, sharex=True, figsize=(14,7),
+        gridspec_kw={"height_ratios":[3,1]}, constrained_layout=True
     )
-    clr = "green" if last>=first else "red"
+
+    clr = "green" if last >= first else "red"
     ax1.plot(df.index, df["Close"], color=clr, label="Price")
     ax1.plot(df.index, df["Trend"], "--", label="Trend")
     if bb_on:
@@ -156,29 +153,29 @@ else:
 
     st.pyplot(fig, use_container_width=True)
 
-    # --- SIGNAL & STATUS ---------------------------------------------------
-    trend_end = df["Trend"].iloc[-1]
-    sig       = "BUY"  if last>trend_end else \
-                "SELL" if last<trend_end else "HOLD"
-    color_map = {"BUY":"green","SELL":"red","HOLD":"gold"}
+    # --- SIGNAL & MARKET STATUS ------------------------------------------
     st.markdown("### Signal")
+    trend_end = df["Trend"].iloc[-1]
+    sig       = ("BUY"  if last > trend_end else
+                 "SELL" if last < trend_end else "HOLD")
+    sig_color = {"BUY":"green","SELL":"red","HOLD":"gold"}[sig]
     st.markdown(
-        f"<div style='background:{color_map[sig]};"
-        f"padding:1em;color:white;text-align:center;"
+        f"<div style='background:{sig_color};"
+        "padding:1em;color:white;text-align:center;"
         f"font-size:1.5em'>{sig}</div>",
         unsafe_allow_html=True
     )
 
+    st.markdown("### Market Status")
     status = get_market_status()
     m24    = get_24h_status()
-    st.markdown("### Market Status")
     st.info(f"{status}   ———   {m24}", icon="⏰")
 
     # --- INFO PANELS ------------------------------------------------------
     st.markdown("### Info Panels")
-    trend_txt = "rising" if last>=first else "falling"
+    trend_txt = "rising" if last >= first else "falling"
     st.markdown(f"#### 🌟 Trend Detected\ntrend: price is {trend_txt}.")
-    st.markdown(f"#### 🔍 Pattern Detected\npattern: {pattern}. (most recent at idx {idx})")
+    st.markdown(f"#### 🔍 Pattern Detected\npattern: {pattern}. (most recent at index {idx})")
 
     # --- AUTO REFRESH ------------------------------------------------------
     now = datetime.now(pytz.timezone("US/Eastern")).strftime("%H:%M:%S")
