@@ -15,7 +15,6 @@ def fetch_data(ticker, period="1d", interval="1m"):
     return df
 
 @st.cache_data
-
 def compute_rsi(prices, period=14):
     delta = prices.diff()
     gain = delta.clip(lower=0)
@@ -49,16 +48,13 @@ if not st.session_state.started:
         st.session_state.show_rsi = show_rsi
         st.session_state.show_boll = show_boll
         st.session_state.refresh = refresh_rate
-        st.experimental_rerun()
 
 # Chart screen
 else:
     st.sidebar.title("Controls")
     if st.sidebar.button("Stop Chart"):
         st.session_state.started = False
-        st.experimental_rerun()
 
-    # Sidebar toggles
     show_rsi = st.sidebar.checkbox("Show RSI", value=st.session_state.show_rsi)
     show_boll = st.sidebar.checkbox("Show Bollinger Bands", value=st.session_state.show_boll)
     refresh_rate = st.sidebar.slider("Refresh every N minutes", 1, 5, st.session_state.refresh)
@@ -68,7 +64,7 @@ else:
     cycle = 1
 
     # Live update loop
-    while True:
+    while st.session_state.started:
         try:
             df = fetch_data(symbol)
         except Exception as e:
@@ -80,18 +76,13 @@ else:
         first_price, last_price = closes.iloc[0], closes.iloc[-1]
         color = 'green' if last_price >= first_price else 'red'
 
-        # Trend line
         x = np.arange(len(closes))
         m, b = np.polyfit(x, closes.values, 1)
         trend = m*x + b
 
-        # Indicators
-        if show_boll:
-            upper, lower = compute_bollinger(closes)
-        if show_rsi:
-            rsi = compute_rsi(closes)
+        upper, lower = compute_bollinger(closes) if show_boll else (None, None)
+        rsi = compute_rsi(closes) if show_rsi else None
 
-        # Plot
         fig, (ax1, ax2) = plt.subplots(2,1,figsize=(12,8), sharex=True)
         ax1.plot(times, closes, color=color, label='Price', linewidth=2)
         ax1.plot(times, trend, linestyle='--', color='orange', label='Trend')
