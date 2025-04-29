@@ -27,7 +27,55 @@ def compute_rsi(prices, period=14):
 def compute_bollinger(prices, window=20, num_std=2):
     ma  = prices.rolling(window).mean()
     std = prices.rolling(window).std()
-    return ma + num_std * std, ma - num_std * std
+    return ma + num_std*std, ma - num_std*std
+
+# ----- Pattern Detection -----
+def detect_pattern(prices):
+    s = prices.values
+    idx = np.arange(len(s))
+    # peaks & troughs
+    peaks = [i for i in range(1,len(s)-1) if s[i]>s[i-1] and s[i]>s[i+1]]
+    troughs = [i for i in range(1,len(s)-1) if s[i]<s[i-1] and s[i]<s[i+1]]
+    # Head & Shoulders
+    if len(peaks)>=3:
+        p1,p2,p3 = peaks[-3:]
+        if s[p2]>s[p1] and s[p2]>s[p3] and abs(s[p1]-s[p3])<0.02*s[p2]:
+            return 'Head and shoulders'
+    # Double Top
+    if len(peaks)>=2:
+        p1,p2 = peaks[-2:]
+        if abs(s[p1]-s[p2])<0.01*np.mean([s[p1],s[p2]]):
+            return 'Double top'
+    # Triple Top
+    if len(peaks)>=3:
+        last3 = peaks[-3:]
+        if np.std(s[last3])<0.01*np.mean(s[last3]):
+            return 'Triple top'
+    # Inverse H&S
+    if len(troughs)>=3:
+        t1,t2,t3 = troughs[-3:]
+        if s[t2]<s[t1] and s[t2]<s[t3] and abs(s[t1]-s[t3])<0.02*np.mean([s[t1],s[t3]]):
+            return 'Inverse head and shoulders'
+    # Double Bottom
+    if len(troughs)>=2:
+        t1,t2 = troughs[-2:]
+        if abs(s[t1]-s[t2])<0.01*np.mean([s[t1],s[t2]]):
+            return 'Double bottom'
+    # Unique Three River (3 troughs rising)
+    if len(troughs)>=3:
+        t1,t2,t3 = troughs[-3:]
+        if s[t1]<s[t2]<s[t3]:
+            return 'Unique three river'
+    # Wedges: slope halves converging
+    mid = len(s)//2
+    m_all,_ = np.polyfit(idx, s, 1)
+    m1,_    = np.polyfit(idx[:mid], s[:mid], 1)
+    m2,_    = np.polyfit(idx[mid:], s[mid:], 1)
+    if m_all>0 and m2<m1:
+        return 'Rising wedge'
+    if m_all<0 and m2>m1:
+        return 'Falling wedge'
+    return 'None'
 
 # ----- Session State -----
 if 'started' not in st.session_state:
@@ -58,7 +106,7 @@ if st.button("Stop Chart"):
 # Auto-refresh
 st_autorefresh(interval=st.session_state.refresh * 60 * 1000, key="auto")
 
-# Fetch
+# Fetch data
 try:
     df = fetch_data(st.session_state.symbol)
 except Exception as e:
@@ -71,36 +119,57 @@ first  = closes.iloc[0].item()
 last   = closes.iloc[-1].item()
 
 # Trend detection
-x = np.arange(len(closes))
-m, b = np.polyfit(x, closes.values, 1)
-trend_name    = "Uptrend" if m > 0 else "Downtrend"
-trend_message = "price is rising" if m > 0 else "price is falling"
+idx = np.arange(len(closes))
+m, b = np.polyfit(idx, closes.values, 1)
+trend_name    = 'Uptrend' if m>0 else 'Downtrend'
+trend_message = f"Detected trend: price is {'rising' if m>0 else 'falling'}."
 
-# Pattern detection placeholder
-pattern_name    = "None"
-pattern_message = "No recognizable chart pattern detected."
+# Pattern detection
+pattern_name = detect_pattern(closes)
+pattern_message = (
+    f"Detected pattern: {pattern_name}." if pattern_name!='None'
+    else "No recognizable chart pattern found."
+)
+
+# Buy/Sell/Hold signal
+gain = last - first
+if pattern_name in ['Inverse head and shoulders','Double bottom','Unique three river','Falling wedge'] or gain>0:
+    signal = 'BUY'
+elif pattern_name in ['Head and shoulders','Double top','Triple top','Rising wedge'] or gain<0:
+    signal = 'SELL'
+else:
+    signal = 'HOLD'
 
 # Indicators
-upper, lower = compute_bollinger(closes) if st.session_state.show_boll else (None, None)
+top_band, bottom_band = compute_bollinger(closes) if st.session_state.show_boll else (None, None)
 rsi = compute_rsi(closes) if st.session_state.show_rsi else None
 
-# Layout: chart + info
-col1, col2 = st.columns([3,1])
+# ----- Layout -----
+sig_col, chart_col, info_col = st.columns([1.5,4,2.5])
 
-with col1:
+with sig_col:
+    st.markdown("### Signal")
+    if signal=='BUY':
+        st.success(signal)
+    elif signal=='SELL':
+        st.error(signal)
+    else:
+        st.warning(signal)
+
+with chart_col:
     fig, (ax1, ax2) = plt.subplots(2,1,figsize=(12,8), sharex=True)
-    # Price & trend line colored by daily change
-    ax1.plot(times, closes, label='Price', color='tab:blue')
-    ax1.plot(times, m*x+b, '--', label='Trend', color='tab:orange')
+    # price line colored by day change
+    color = 'green' if last>=first else 'red'
+    ax1.plot(times, closes, color=color, label='Price')
+    ax1.plot(times, m*idx+b, '--', color='orange', label='Trend')
     if st.session_state.show_boll:
-        ax1.plot(times, upper, '--', alpha=0.5, label='Bollinger Upper')
-        ax1.plot(times, lower, '--', alpha=0.5, label='Bollinger Lower')
+        ax1.plot(times, top_band, '--', alpha=0.5, label='Bollinger Upper')
+        ax1.plot(times, bottom_band, '--', alpha=0.5, label='Bollinger Lower')
     ax1.set_title(f"{st.session_state.symbol} – Daily Change: {last-first:+.2f}")
-    ax1.set_ylabel("Price (USD)")
+    ax1.set_ylabel('Price (USD)')
     ax1.legend()
     ax1.grid(True)
 
-    # RSI subplot
     if rsi is not None:
         ax2.plot(times, rsi, label='RSI')
         ax2.axhline(y=70, linestyle='--', alpha=0.3)
@@ -115,9 +184,8 @@ with col1:
     st.pyplot(fig)
     st.markdown(f"Last refresh: {pd.Timestamp.now().strftime('%H:%M:%S')} — next in {st.session_state.refresh} min")
 
-with col2:
-    st.markdown("### Trend Info")
-    st.info(f"**{trend_name}**\nDetected trend: {trend_message}.")
-
-    st.markdown("### Pattern Info")
-    st.warning(f"**Pattern:** {pattern_name}\n{pattern_message}")
+with info_col:
+    st.markdown('### Trend Info')
+    st.info(f"**{trend_name}**\n{trend_message}")
+    st.markdown('### Pattern Info')
+    st.warning(f"**{pattern_name}**\n{pattern_message}")
