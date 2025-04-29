@@ -4,7 +4,6 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from streamlit_autorefresh import st_autorefresh
-import time
 
 # --- Data Functions ---
 @st.cache_data
@@ -17,8 +16,8 @@ def fetch_data(ticker, period="1d", interval="1m"):
 @st.cache_data
 def compute_rsi(prices, period=14):
     delta = prices.diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
+    gain  = delta.clip(lower=0)
+    loss  = -delta.clip(upper=0)
     avg_gain = gain.rolling(window=period).mean()
     avg_loss = loss.rolling(window=period).mean()
     rs = avg_gain / avg_loss
@@ -26,11 +25,11 @@ def compute_rsi(prices, period=14):
 
 @st.cache_data
 def compute_bollinger(prices, window=20, num_std=2):
-    ma = prices.rolling(window).mean()
+    ma  = prices.rolling(window).mean()
     std = prices.rolling(window).std()
     return ma + num_std * std, ma - num_std * std
 
-# --- Session State ---
+# --- Session State Initialization ---
 if 'started' not in st.session_state:
     st.session_state.started = False
 if 'symbol' not in st.session_state:
@@ -39,24 +38,27 @@ if 'symbol' not in st.session_state:
 # --- Input Screen ---
 if not st.session_state.started:
     st.title("Investment Trend App")
-    symbol_input = st.text_input("Enter stock ticker:", value="AAPL").upper()
-    show_rsi_input = st.checkbox("Show RSI", value=True)
+
+    symbol_input    = st.text_input("Enter stock ticker:", value="AAPL").upper()
+    show_rsi_input  = st.checkbox("Show RSI", value=True)
     show_boll_input = st.checkbox("Show Bollinger Bands", value=True)
-    refresh_input = st.slider("Refresh every N minutes", 1, 5, 1)
+    refresh_input   = st.slider("Refresh every N minutes", 1, 5, 1)
+
     if st.button("Start Chart") and symbol_input:
         st.session_state.started   = True
         st.session_state.symbol    = symbol_input
         st.session_state.show_rsi  = show_rsi_input
         st.session_state.show_boll = show_boll_input
         st.session_state.refresh   = refresh_input
+
     st.stop()
 
 # --- Chart Screen ---
 if st.button("Stop Chart"):
     st.session_state.started = False
-    st.experimental_rerun()
+    st.stop()
 
-# Auto-refresh
+# auto refresh the page every N minutes
 st_autorefresh(interval=st.session_state.refresh * 60 * 1000, key="auto")
 
 symbol       = st.session_state.symbol
@@ -71,37 +73,34 @@ except Exception as e:
     st.error(e)
     st.stop()
 
-closes = df['Close']
+closes = df["Close"]
 times  = df.index
 first  = closes.iloc[0].item()
 last   = closes.iloc[-1].item()
 
-# Trend line
+# Compute trend line
 x = np.arange(len(closes))
 m, b = np.polyfit(x, closes.values, 1)
 trend = m * x + b
 
-# Bollinger Bands
+# Compute Bollinger bands if requested
 if show_boll:
     upper, lower = compute_bollinger(closes)
 else:
     upper = lower = None
 
-# RSI
-if show_rsi:
-    rsi = compute_rsi(closes)
-else:
-    rsi = None
+# Compute RSI if requested
+rsi = compute_rsi(closes) if show_rsi else None
 
-# Plotting
+# --- Plotting ---
 fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
 
-# Price & Trend
-ax1.plot(times, closes, label='Price')
-ax1.plot(times, trend, '--', label='Trend')
+# Price + Trend
+ax1.plot(times, closes, label="Price")
+ax1.plot(times, trend, "--", label="Trend")
 if show_boll:
-    ax1.plot(times, upper, '--', alpha=0.5, label='Bollinger Upper')
-    ax1.plot(times, lower, '--', alpha=0.5, label='Bollinger Lower')
+    ax1.plot(times, upper, "--", alpha=0.5, label="Bollinger Upper")
+    ax1.plot(times, lower, "--", alpha=0.5, label="Bollinger Lower")
 ax1.set_title(f"{symbol} – Change: {last-first:+.2f}")
 ax1.set_ylabel("Price (USD)")
 ax1.legend()
@@ -109,5 +108,15 @@ ax1.grid(True)
 
 # RSI subplot
 if show_rsi and rsi is not None:
-    ax2.plot(times, rsi, label='RSI')
-    ax2.axhline(70, linestyle='--', color='red', alpha=0.3)
+    ax2.plot(times, rsi, label="RSI")
+    ax2.axhline(y=70, linestyle="--", alpha=0.3)
+    ax2.axhline(y=30, linestyle="--", alpha=0.3)
+    ax2.set_ylabel("RSI")
+    ax2.legend()
+    ax2.grid(True)
+else:
+    ax2.axis("off")
+
+plt.tight_layout()
+st.pyplot(fig)
+st.markdown(f"Last refresh: {pd.Timestamp.now().strftime('%H:%M:%S')} — next in {refresh_rate} min")
