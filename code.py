@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from streamlit_autorefresh import st_autorefresh
 
-# --- Data Functions ---
+# ----- Data Functions -----
 @st.cache_data
 def fetch_data(ticker, period="1d", interval="1m"):
     df = yf.download(ticker, period=period, interval=interval, progress=False)
@@ -29,16 +29,15 @@ def compute_bollinger(prices, window=20, num_std=2):
     std = prices.rolling(window).std()
     return ma + num_std * std, ma - num_std * std
 
-# --- Session State Initialization ---
+# ----- Session State -----
 if 'started' not in st.session_state:
     st.session_state.started = False
 if 'symbol' not in st.session_state:
     st.session_state.symbol = ""
 
-# --- Input Screen ---
+# ----- Input Screen -----
 if not st.session_state.started:
     st.title("Investment Trend App")
-
     symbol_input    = st.text_input("Enter stock ticker:", value="AAPL").upper()
     show_rsi_input  = st.checkbox("Show RSI", value=True)
     show_boll_input = st.checkbox("Show Bollinger Bands", value=True)
@@ -50,73 +49,78 @@ if not st.session_state.started:
         st.session_state.show_rsi  = show_rsi_input
         st.session_state.show_boll = show_boll_input
         st.session_state.refresh   = refresh_input
-
     st.stop()
 
-# --- Chart Screen ---
+# ----- Chart Screen -----
+# Stop button
 if st.button("Stop Chart"):
     st.session_state.started = False
     st.stop()
 
-# auto refresh the page every N minutes
+# Auto-refresh every N minutes
 st_autorefresh(interval=st.session_state.refresh * 60 * 1000, key="auto")
-
-symbol       = st.session_state.symbol
-show_rsi     = st.session_state.show_rsi
-show_boll    = st.session_state.show_boll
-refresh_rate = st.session_state.refresh
 
 # Fetch data
 try:
-    df = fetch_data(symbol)
+    df = fetch_data(st.session_state.symbol)
 except Exception as e:
     st.error(e)
     st.stop()
 
-closes = df["Close"]
+closes = df['Close']
 times  = df.index
 first  = closes.iloc[0].item()
 last   = closes.iloc[-1].item()
 
-# Compute trend line
+# Compute Trend (slope of polyfit)
 x = np.arange(len(closes))
 m, b = np.polyfit(x, closes.values, 1)
-trend = m * x + b
+trend_line = m * x + b
+trend_name = "Uptrend" if m > 0 else "Downtrend"
+trend_meaning = "Price is rising" if m > 0 else "Price is falling"
 
-# Compute Bollinger bands if requested
-if show_boll:
+# Compute Bollinger Bands
+if st.session_state.show_boll:
     upper, lower = compute_bollinger(closes)
 else:
     upper = lower = None
 
-# Compute RSI if requested
-rsi = compute_rsi(closes) if show_rsi else None
+# Compute RSI
+rsi = compute_rsi(closes) if st.session_state.show_rsi else None
 
-# --- Plotting ---
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+# ----- Layout: Chart + Info -----
+col1, col2 = st.columns([3, 1])
 
-# Price + Trend
-ax1.plot(times, closes, label="Price")
-ax1.plot(times, trend, "--", label="Trend")
-if show_boll:
-    ax1.plot(times, upper, "--", alpha=0.5, label="Bollinger Upper")
-    ax1.plot(times, lower, "--", alpha=0.5, label="Bollinger Lower")
-ax1.set_title(f"{symbol} – Change: {last-first:+.2f}")
-ax1.set_ylabel("Price (USD)")
-ax1.legend()
-ax1.grid(True)
+with col1:
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
 
-# RSI subplot
-if show_rsi and rsi is not None:
-    ax2.plot(times, rsi, label="RSI")
-    ax2.axhline(y=70, linestyle="--", alpha=0.3)
-    ax2.axhline(y=30, linestyle="--", alpha=0.3)
-    ax2.set_ylabel("RSI")
-    ax2.legend()
-    ax2.grid(True)
-else:
-    ax2.axis("off")
+    # Price & Trend line colored by day change
+    color = 'green' if last >= first else 'red'
+    ax1.plot(times, closes, color=color, label='Price')
+    ax1.plot(times, trend_line, '--', color='orange', label='Trend')
+    if st.session_state.show_boll:
+        ax1.plot(times, upper, '--', alpha=0.5, label='Bollinger Upper')
+        ax1.plot(times, lower, '--', alpha=0.5, label='Bollinger Lower')
+    ax1.set_title(f"{st.session_state.symbol} – Change: {last-first:+.2f}")
+    ax1.set_ylabel("Price (USD)")
+    ax1.legend()
+    ax1.grid(True)
 
-plt.tight_layout()
-st.pyplot(fig)
-st.markdown(f"Last refresh: {pd.Timestamp.now().strftime('%H:%M:%S')} — next in {refresh_rate} min")
+    # RSI plot
+    if rsi is not None:
+        ax2.plot(times, rsi, label='RSI')
+        ax2.axhline(y=70, linestyle='--', alpha=0.3)
+        ax2.axhline(y=30, linestyle='--', alpha=0.3)
+        ax2.set_ylabel('RSI')
+        ax2.legend()
+        ax2.grid(True)
+    else:
+        ax2.axis('off')
+
+    plt.tight_layout()
+    st.pyplot(fig)
+    st.markdown(f"Last refresh: {pd.Timestamp.now().strftime('%H:%M:%S')} — next in {st.session_state.refresh} min")
+
+with col2:
+    st.markdown("### Trend Info")
+    st.info(f"**{trend_name}**\n{trend_meaning}")
