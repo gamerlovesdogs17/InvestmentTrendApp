@@ -110,14 +110,4 @@ ax1.grid(True)
 # RSI subplot
 if show_rsi and rsi is not None:
     ax2.plot(times, rsi, label='RSI')
-    ax2.axhline(70, '--', alpha=0.3)
-    ax2.axhline(30, '--', alpha=0.3)
-    ax2.set_ylabel('RSI')
-    ax2.legend()
-    ax2.grid(True)
-else:
-    ax2.axis('off')
-
-plt.tight_layout()
-st.pyplot(fig)
-st.markdown(f"Last refresh: {pd.Timestamp.now().strftime('%H:%M:%S')} (next in {refresh_rate} min)")
+    ax2.axhline(70, linestyle='--', color='red', alpha=0.3)
