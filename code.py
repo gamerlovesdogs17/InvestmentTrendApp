@@ -7,18 +7,19 @@ import matplotlib.dates as mdates
 from datetime import datetime
 import pytz
 
-# --- A tiny shim so that rerun() works whether or not st.experimental_rerun exists ---
+# --- RERUN SHIM ------------------------------------------------------------
 try:
     rerun = st.experimental_rerun
 except AttributeError:
     from streamlit.runtime.scriptrunner.script_runner import RerunException
     def rerun(*args, **kwargs):
-        raise RerunException()
+        # Streamlit 1.45+ RerunException needs a 'rerun_data' arg
+        raise RerunException({})
 
-# --- Helper functions ------------------------------------------------------
+# --- HELPERS ---------------------------------------------------------------
 
 @st.cache_data(ttl=60)
-def get_intraday(ticker: str):
+def get_intraday(ticker: str) -> pd.DataFrame:
     df = yf.download(ticker, period="1d", interval="1m", progress=False).dropna()
     return df
 
@@ -39,12 +40,15 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     avg_loss = loss.rolling(14).mean()
     rs = avg_gain / avg_loss
     df["RSI"] = 100 - (100/(1+rs))
+
     return df
 
 def detect_pattern(df: pd.DataFrame):
     c = df["Close"].values
     peaks = np.argwhere((c[1:-1]>c[:-2])&(c[1:-1]>c[2:])).flatten()+1
-    if len(peaks)>=2:
+    if len(peaks)>=3:
+        return "Triple top", peaks[-1]
+    if len(peaks)==2:
         return "Double top", peaks[-1]
     return "None", len(df)-1
 
@@ -69,70 +73,68 @@ def get_24h_status(now=None):
         return "24h Closed"
     return "24h Open"
 
+# --- SESSION STATE DEFAULTS ------------------------------------------------
 
-# --- Session state defaults -----------------------------------------------
-
-for k,v in {
-    "started":False,
-    "ticker":"",
-    "rsi_on":True,
-    "bb_on":True,
-    "refresh":1
+for key, val in {
+    "started": False,
+    "ticker":   "",
+    "rsi_on":   True,
+    "bb_on":    True,
+    "refresh":  1
 }.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
+    if key not in st.session_state:
+        st.session_state[key] = val
 
-# --- Page & Title ---------------------------------------------------------
+# --- PAGE LAYOUT ------------------------------------------------------------
 
 st.set_page_config(layout="wide")
 st.title("📈 Intraday Trend & Pattern Scanner")
 
-# --- SETTINGS SCREEN ------------------------------------------------------
+# --- SETTINGS SCREEN -------------------------------------------------------
 
 if not st.session_state.started:
-    t_in  = st.text_input("Ticker (e.g. AAPL)").upper()
-    r_in  = st.checkbox("Show RSI", True)
-    bb_in = st.checkbox("Show Bollinger Bands", True)
-    ref   = st.slider("Refresh every N minutes", 1,5,1)
+    ticker_input = st.text_input("Ticker (e.g. AAPL)").upper()
+    rsi_input    = st.checkbox("Show RSI", True)
+    bb_input     = st.checkbox("Show Bollinger Bands", True)
+    ref_input    = st.slider("Refresh every N minutes", 1, 5, 1)
 
     if st.button("▶ Start Chart"):
-        if not t_in:
+        if not ticker_input:
             st.error("Please enter a ticker.")
         else:
-            st.session_state.ticker   = t_in
-            st.session_state.rsi_on   = r_in
-            st.session_state.bb_on    = bb_in
-            st.session_state.refresh  = ref
+            st.session_state.ticker   = ticker_input
+            st.session_state.rsi_on   = rsi_input
+            st.session_state.bb_on    = bb_input
+            st.session_state.refresh  = ref_input
             st.session_state.started  = True
             rerun()
 
-# --- CHART SCREEN ---------------------------------------------------------
+# --- CHART SCREEN ----------------------------------------------------------
 
 else:
     if st.button("← Back to Settings"):
         st.session_state.started = False
         rerun()
 
-    ticker = st.session_state.ticker
-    rsi_on  = st.session_state.rsi_on
-    bb_on   = st.session_state.bb_on
-    refresh = st.session_state.refresh
+    ticker   = st.session_state.ticker
+    rsi_on   = st.session_state.rsi_on
+    bb_on    = st.session_state.bb_on
+    refresh  = st.session_state.refresh
 
-    df = get_intraday(ticker)
-    df = compute_indicators(df)
-    pattern, pat_idx = detect_pattern(df)
-    first = float(df["Close"].iloc[0])
-    last  = float(df["Close"].iloc[-1])
+    df        = get_intraday(ticker)
+    df        = compute_indicators(df)
+    pattern, idx = detect_pattern(df)
+    first     = float(df["Close"].iloc[0])
+    last      = float(df["Close"].iloc[-1])
 
-    # --- PLOT with shared x-axis ----------------------------------------
+    # --- PLOT -------------------------------------------------------------
     fig, (ax1, ax2) = plt.subplots(
         2,1, sharex=True, figsize=(14,7),
         gridspec_kw={"height_ratios":[3,1]},
         constrained_layout=True
     )
-
-    clr = "green" if last>=first else "red"
-    ax1.plot(df.index, df["Close"], color=clr, label="Price")
+    color = "green" if last>=first else "red"
+    ax1.plot(df.index, df["Close"], color=color, label="Price")
     ax1.plot(df.index, df["Trend"], "--", label="Trend")
     if bb_on:
         ax1.plot(df.index, df["BB_upper"], ":", label="Boll Upper")
@@ -142,9 +144,9 @@ else:
     ax1.grid(True)
 
     if rsi_on:
-        ax2.plot(df.index, df["RSI"], color="orange", label="RSI")
-        ax2.axhline(70,"--",alpha=0.5)
-        ax2.axhline(30,"--",alpha=0.5)
+        ax2.plot(df.index, df["RSI"], color="orange", linewidth=1.5, label="RSI")
+        ax2.axhline(70, linestyle="--", alpha=0.5)
+        ax2.axhline(30, linestyle="--", alpha=0.5)
         ax2.set_ylabel("RSI")
         ax2.legend(loc="upper left")
         ax2.grid(True)
@@ -155,25 +157,28 @@ else:
 
     st.pyplot(fig)
 
-    # --- SIGNAL & MARKET -------------------------------------------------
+    # --- SIGNAL & MARKET STATUS ------------------------------------------
     trend_end = df["Trend"].iloc[-1]
-    sig = ("BUY" if last>trend_end else "SELL" if last<trend_end else "HOLD")
-    sig_col = "green" if sig=="BUY" else "red" if sig=="SELL" else "yellow"
+    signal    = "BUY" if last>trend_end else "SELL" if last<trend_end else "HOLD"
+    sig_color = "green" if signal=="BUY" else "red" if signal=="SELL" else "yellow"
     st.markdown("### Signal")
-    st.markdown(f"<div style='background:{sig_col};padding:1em;color:white;text-align:center'>{sig}</div>", unsafe_allow_html=True)
+    st.markdown(
+        f"<div style='background:{sig_color};padding:1em;color:white;text-align:center;font-size:1.5em'>{signal}</div>",
+        unsafe_allow_html=True
+    )
 
     status = get_market_status()
     m24    = get_24h_status()
     st.markdown("### Market Status")
     st.info(f"{status}   --------   {m24}")
 
-    # --- INFO PANELS -----------------------------------------------------
+    # --- INFO PANELS ------------------------------------------------------
     st.markdown("### Info Panels")
     trend_txt = "price is rising" if last>=first else "price is falling"
     st.success(f"Uptrend Detected\ntrend: {trend_txt}")
     st.success(f"{pattern} Detected\npattern: {pattern}")
 
-    # --- AUTO-REFRESH ----------------------------------------------------
+    # --- AUTO REFRESH ------------------------------------------------------
     now = datetime.now(pytz.timezone("US/Eastern")).strftime("%H:%M:%S")
     st.write(f"*Last refresh:* {now} — *next in* {refresh} min")
     rerun(interval=refresh*60)
