@@ -42,7 +42,6 @@ if not st.session_state.started:
     show_rsi_input  = st.checkbox("Show RSI", value=True)
     show_boll_input = st.checkbox("Show Bollinger Bands", value=True)
     refresh_input   = st.slider("Refresh every N minutes", 1, 5, 1)
-
     if st.button("Start Chart") and symbol_input:
         st.session_state.started   = True
         st.session_state.symbol    = symbol_input
@@ -52,15 +51,14 @@ if not st.session_state.started:
     st.stop()
 
 # ----- Chart Screen -----
-# Stop button
 if st.button("Stop Chart"):
     st.session_state.started = False
     st.stop()
 
-# Auto-refresh every N minutes
+# Auto-refresh
 st_autorefresh(interval=st.session_state.refresh * 60 * 1000, key="auto")
 
-# Fetch data
+# Fetch
 try:
     df = fetch_data(st.session_state.symbol)
 except Exception as e:
@@ -72,41 +70,37 @@ times  = df.index
 first  = closes.iloc[0].item()
 last   = closes.iloc[-1].item()
 
-# Compute Trend (slope of polyfit)
+# Trend detection
 x = np.arange(len(closes))
 m, b = np.polyfit(x, closes.values, 1)
-trend_line = m * x + b
-trend_name = "Uptrend" if m > 0 else "Downtrend"
-trend_meaning = "Price is rising" if m > 0 else "Price is falling"
+trend_name    = "Uptrend" if m > 0 else "Downtrend"
+trend_message = "price is rising" if m > 0 else "price is falling"
 
-# Compute Bollinger Bands
-if st.session_state.show_boll:
-    upper, lower = compute_bollinger(closes)
-else:
-    upper = lower = None
+# Pattern detection placeholder
+pattern_name    = "None"
+pattern_message = "No recognizable chart pattern detected."
 
-# Compute RSI
+# Indicators
+upper, lower = compute_bollinger(closes) if st.session_state.show_boll else (None, None)
 rsi = compute_rsi(closes) if st.session_state.show_rsi else None
 
-# ----- Layout: Chart + Info -----
-col1, col2 = st.columns([3, 1])
+# Layout: chart + info
+col1, col2 = st.columns([3,1])
 
 with col1:
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
-
-    # Price & Trend line colored by day change
-    color = 'green' if last >= first else 'red'
-    ax1.plot(times, closes, color=color, label='Price')
-    ax1.plot(times, trend_line, '--', color='orange', label='Trend')
+    fig, (ax1, ax2) = plt.subplots(2,1,figsize=(12,8), sharex=True)
+    # Price & trend line colored by daily change
+    ax1.plot(times, closes, label='Price', color='tab:blue')
+    ax1.plot(times, m*x+b, '--', label='Trend', color='tab:orange')
     if st.session_state.show_boll:
         ax1.plot(times, upper, '--', alpha=0.5, label='Bollinger Upper')
         ax1.plot(times, lower, '--', alpha=0.5, label='Bollinger Lower')
-    ax1.set_title(f"{st.session_state.symbol} – Change: {last-first:+.2f}")
+    ax1.set_title(f"{st.session_state.symbol} – Daily Change: {last-first:+.2f}")
     ax1.set_ylabel("Price (USD)")
     ax1.legend()
     ax1.grid(True)
 
-    # RSI plot
+    # RSI subplot
     if rsi is not None:
         ax2.plot(times, rsi, label='RSI')
         ax2.axhline(y=70, linestyle='--', alpha=0.3)
@@ -123,4 +117,7 @@ with col1:
 
 with col2:
     st.markdown("### Trend Info")
-    st.info(f"**{trend_name}**\n{trend_meaning}")
+    st.info(f"**{trend_name}**\nDetected trend: {trend_message}.")
+
+    st.markdown("### Pattern Info")
+    st.warning(f"**Pattern:** {pattern_name}\n{pattern_message}")
