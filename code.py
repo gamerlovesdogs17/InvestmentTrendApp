@@ -1,21 +1,21 @@
 import yfinance as yf
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
 import streamlit as st
-import os
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
 import time
 
-def fetch_data(ticker, period="1d", interval="1m"):
-    try:
-        df = yf.download(ticker, period=period, interval=interval, progress=False)
-        if df.empty:
-            raise ValueError("No price data found. Ticker may be invalid or delisted.")
-        return df
-    except Exception as e:
-        st.error(f"[Error] {e}")
-        return pd.DataFrame()
+st.set_page_config(layout="wide", page_title="Investment Trend App")
 
+#--- Data fetching and indicator functions ---
+@st.cache_data
+def fetch_data(ticker, period="1d", interval="1m"):
+    df = yf.download(ticker, period=period, interval=interval, progress=False)
+    if df.empty:
+        raise ValueError("No price data found. Ticker may be invalid or delisted.")
+    return df
+
+@st.cache_data
 def compute_rsi(prices, period=14):
     delta = prices.diff()
     gain = delta.clip(lower=0)
@@ -25,113 +25,98 @@ def compute_rsi(prices, period=14):
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
-def compute_bollinger_bands(prices, window=20, num_std=2):
+@st.cache_data
+def compute_bollinger(prices, window=20, num_std=2):
     ma = prices.rolling(window).mean()
     std = prices.rolling(window).std()
     upper = ma + num_std * std
     lower = ma - num_std * std
     return upper, lower
 
-def detect_pattern(prices):
-    if len(prices) < 6:
-        return None
-    p = prices.iloc
+#--- Streamlit session state ---
+if 'started' not in st.session_state:
+    st.session_state.started = False
+
+#--- Initial controls ---
+if not st.session_state.started:
+    st.title("📈 Investment Trend App")
+    symbol = st.text_input("Enter stock ticker symbol:", value="AAPL").upper()
+    show_rsi = st.checkbox("Show RSI", value=True)
+    show_boll = st.checkbox("Show Bollinger Bands", value=True)
+    refresh_rate = st.slider("Refresh every N minutes", 1, 5, 1)
+
+    if st.button("Start Chart") and symbol:
+        st.session_state.started = True
+        st.session_state.symbol = symbol
+        st.session_state.show_rsi = show_rsi
+        st.session_state.show_boll = show_boll
+        st.session_state.refresh = refresh_rate
+        st.experimental_rerun()
+else:
+    # Sidebar toggles
+    st.sidebar.title("Controls")
+    show_rsi = st.sidebar.checkbox("Show RSI", value=st.session_state.show_rsi)
+    show_boll = st.sidebar.checkbox("Show Bollinger Bands", value=st.session_state.show_boll)
+    refresh_rate = st.sidebar.slider("Refresh every N minutes", 1, 5, st.session_state.refresh)
+
+    symbol = st.session_state.symbol
+    placeholder = st.empty()
+    cycle = 1
+
     try:
-        if (
-            p[-5] > p[-4] and
-            p[-3] < p[-2] and
-            p[-2] > p[-1]
-        ):
-            return "W"
-        elif (
-            p[-5] < p[-4] and
-            p[-3] > p[-2] and
-            p[-2] < p[-1]
-        ):
-            return "M"
-        elif list(p[-5:]) == sorted(p[-5:]):
-            return "UPTREND"
-        elif list(p[-5:]) == sorted(p[-5:], reverse=True):
-            return "DOWNTREND"
-    except:
-        return None
-    return None
+        while True:
+            df = fetch_data(symbol)
+            closes = df['Close']
+            times = df.index
 
-def detect_volume_breakout(volumes):
-    if len(volumes) < 20:
-        return False
-    return volumes.iloc[-1] > 2 * volumes.iloc[-20:-1].mean()
+            # Determine color based on daily change
+            first_price = closes.iloc[0]
+            last_price = closes.iloc[-1]
+            price_color = 'green' if last_price >= first_price else 'red'
 
-def get_signal(pattern, vol_breakout):
-    pattern = str(pattern) if pattern is not None else ""
-    if pattern in ["W", "UPTREND"] and vol_breakout:
-        return "STRONG BUY"
-    elif pattern in ["W", "UPTREND"]:
-        return "BUY"
-    elif pattern in ["M", "DOWNTREND"] and vol_breakout:
-        return "STRONG SELL"
-    elif pattern in ["M", "DOWNTREND"]:
-        return "SELL"
-    return "HOLD"
+            # Compute trend line
+            x = np.arange(len(closes))
+            y = closes.values
+            m, b = np.polyfit(x, y, 1)
+            trend = m * x + b
 
-def plot_chart(ticker, df, show_rsi, show_boll):
-    closes = df["Close"]
-    volumes = df["Volume"]
-    times = df.index
+            # Bollinger Bands
+            if show_boll:
+                upper, lower = compute_bollinger(closes)
 
-    x = np.arange(len(closes))
-    y = closes.values
-    m, b = np.polyfit(x, y, 1)
-    trend = m * x + b
+            # RSI
+            if show_rsi:
+                rsi = compute_rsi(closes)
 
-    pattern = detect_pattern(closes)
-    vol_break = detect_volume_breakout(volumes)
-    signal = get_signal(pattern, vol_break)
+            # Build figure
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+            # Price & Trend
+            ax1.plot(times, closes, label='Price', color=price_color, linewidth=2)
+            ax1.plot(times, trend, linestyle='--', label='Trend', color='orange')
+            if show_boll:
+                ax1.plot(times, upper, linestyle='--', color='gray', alpha=0.5, label='Bollinger Upper')
+                ax1.plot(times, lower, linestyle='--', color='gray', alpha=0.5, label='Bollinger Lower')
+            ax1.set_title(f"{symbol} • Daily Change: {last_price-first_price:+.2f}")
+            ax1.set_ylabel("Price (USD)")
+            ax1.legend()
+            ax1.grid(True, linestyle='--', alpha=0.5)
 
-    fig, ax1 = plt.subplots(figsize=(12, 6))
-    ax1.plot(times, closes, label="Price", color="blue", linewidth=2)
-    ax1.plot(times, trend, linestyle="--", color="orange", label="Trend")
+            # RSI subplot
+            if show_rsi:
+                ax2.plot(times, rsi, color='purple', label='RSI')
+                ax2.axhline(70, color='red', linestyle='--', alpha=0.3)
+                ax2.axhline(30, color='green', linestyle='--', alpha=0.3)
+                ax2.set_ylabel('RSI')
+                ax2.set_xlabel('Time')
+                ax2.legend()
+                ax2.grid(True, linestyle='--', alpha=0.5)
+            else:
+                ax2.axis('off')
 
-    if "BUY" in signal:
-        ax1.axhline(closes.iloc[-1], color="green", linestyle=":", label=signal)
-    elif "SELL" in signal:
-        ax1.axhline(closes.iloc[-1], color="red", linestyle=":", label=signal)
-
-    if show_boll:
-        upper, lower = compute_bollinger_bands(closes)
-        ax1.plot(times, upper, linestyle="--", color="gray", alpha=0.5, label="Bollinger Upper")
-        ax1.plot(times, lower, linestyle="--", color="gray", alpha=0.5, label="Bollinger Lower")
-
-    ax1.set_title(f"{ticker} • Pattern: {pattern or 'None'} • Signal: {signal}", fontsize=14)
-    ax1.set_ylabel("Price (USD)")
-    ax1.set_xlabel("Time")
-    ax1.legend()
-    ax1.grid(True)
-
-    if show_rsi:
-        rsi = compute_rsi(closes)
-        ax2 = ax1.twinx()
-        ax2.plot(times, rsi, color="purple", alpha=0.5, label="RSI")
-        ax2.axhline(70, color="red", linestyle="--", alpha=0.3)
-        ax2.axhline(30, color="green", linestyle="--", alpha=0.3)
-        ax2.set_ylim(0, 100)
-        ax2.set_ylabel("RSI")
-        ax2.legend(loc="upper right")
-
-    st.pyplot(fig)
-
-# Streamlit UI
-st.title("📊 Live Stock Chart Viewer")
-
-symbol = st.text_input("Enter stock ticker symbol:", value="AAPL").upper()
-show_rsi = st.checkbox("Show RSI", value=True)
-show_boll = st.checkbox("Show Bollinger Bands", value=True)
-refresh_rate = st.slider("Refresh every N minutes", min_value=1, max_value=5, value=1)
-
-if st.button("Start Chart"):
-    while True:
-        df = fetch_data(symbol)
-        if not df.empty:
-            plot_chart(symbol, df, show_rsi, show_boll)
-        time.sleep(refresh_rate * 60)
+            plt.tight_layout()
+            placeholder.pyplot(fig)
+            st.markdown(f"**Refresh #{cycle}** — Next update in {refresh_rate} minute(s)")
+            cycle += 1
+            time.sleep(refresh_rate * 60)
+    except KeyboardInterrupt:
         st.experimental_rerun()
