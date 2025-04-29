@@ -15,54 +15,57 @@ def get_intraday(ticker):
     return df
 
 def compute_indicators(df):
-    # linear trendline
-    df["Trend"] = pd.Series(
-        np.poly1d(np.polyfit(np.arange(len(df)), df["Close"], 1))(np.arange(len(df)))
-    )
+    x = np.arange(len(df))
+    # linear trend: slope & intercept
+    slope, intercept = np.polyfit(x, df["Close"].values, 1)
+    df["Trend"] = slope * x + intercept
+
     # Bollinger Bands
     df["BB_mid"] = df["Close"].rolling(20).mean()
     df["BB_std"] = df["Close"].rolling(20).std()
     df["BB_upper"] = df["BB_mid"] + 2 * df["BB_std"]
     df["BB_lower"] = df["BB_mid"] - 2 * df["BB_std"]
+
     # RSI
-    delta = df["Close"].diff()
-    up, down = delta.clip(lower=0), -delta.clip(upper=0)
-    ma_up = up.ewm(span=14, adjust=False).mean()
+    delta   = df["Close"].diff()
+    up      = delta.clip(lower=0)
+    down    = -delta.clip(upper=0)
+    ma_up   = up.ewm(span=14, adjust=False).mean()
     ma_down = down.ewm(span=14, adjust=False).mean()
-    rs = ma_up / ma_down
+    rs      = ma_up / ma_down
     df["RSI"] = 100 - (100 / (1 + rs))
+
     return df.dropna()
 
 def detect_pattern(df):
     closes = df["Close"].values
     found = []
-    # scan 5-bar windows
     for i in range(len(closes) - 4):
-        w = closes[i : i + 5]
+        w = closes[i:i+5]
         # Head & Shoulders
-        if w[2] > w[1] and w[2] > w[3] and w[0] < w[1] and w[4] < w[3]:
-            found.append(("Head & Shoulders", i + 2))
+        if w[2]>w[1] and w[2]>w[3] and w[0]<w[1] and w[4]<w[3]:
+            found.append(("Head & Shoulders", i+2))
         # Inverse Head & Shoulders
-        elif w[2] < w[1] and w[2] < w[3] and w[0] > w[1] and w[4] > w[3]:
-            found.append(("Inverse H&S", i + 2))
+        elif w[2]<w[1] and w[2]<w[3] and w[0]>w[1] and w[4]>w[3]:
+            found.append(("Inverse H&S", i+2))
         # Double Top
-        elif w[1] > w[2] < w[3] and abs(w[1] - w[3]) / w[1] < 0.01:
-            found.append(("Double Top", i + 1))
+        elif w[1]>w[2]<w[3] and abs(w[1]-w[3])/w[1]<0.01:
+            found.append(("Double Top", i+1))
         # Double Bottom
-        elif w[1] < w[2] > w[3] and abs(w[1] - w[3]) / w[1] < 0.01:
-            found.append(("Double Bottom", i + 1))
+        elif w[1]<w[2]>w[3] and abs(w[1]-w[3])/w[1]<0.01:
+            found.append(("Double Bottom", i+1))
         # Triple Top
-        elif w[0] < w[1] > w[2] < w[3] and w[3] > w[4]:
-            found.append(("Triple Top", i + 2))
+        elif w[0]<w[1]>w[2]<w[3] and w[3]>w[4]:
+            found.append(("Triple Top", i+2))
         # Unique Three River
-        elif w[0] > w[1] < w[2] > w[3] < w[4] and abs(w[1] - w[3]) / w[1] < 0.01:
-            found.append(("Unique Three River", i + 2))
-        # Rising Wedge (gentle up slope)
-        elif np.polyfit(np.arange(5), w, 1)[0] > 0 and (w.max() - w.min()) < np.std(w) * 1.5:
-            found.append(("Rising Wedge", i + 2))
+        elif w[0]>w[1]<w[2]>w[3]<w[4] and abs(w[1]-w[3])/w[1]<0.01:
+            found.append(("Unique Three River", i+2))
+        # Rising Wedge
+        elif np.polyfit(np.arange(5), w, 1)[0]>0 and (w.max()-w.min())<np.std(w)*1.5:
+            found.append(("Rising Wedge", i+2))
         # Falling Wedge
-        elif np.polyfit(np.arange(5), w, 1)[0] < 0 and (w.max() - w.min()) < np.std(w) * 1.5:
-            found.append(("Falling Wedge", i + 2))
+        elif np.polyfit(np.arange(5), w, 1)[0]<0 and (w.max()-w.min())<np.std(w)*1.5:
+            found.append(("Falling Wedge", i+2))
     return found[-1] if found else ("None", None)
 
 def get_market_status():
@@ -77,40 +80,36 @@ def get_market_status():
 def get_24h_status():
     now = datetime.now(pytz.timezone("US/Eastern"))
     dow, tod = now.weekday(), now.time()
-    # 24h open Sun 20:00 ET → Fri 20:00 ET
-    if dow == 6 and tod < time(20,0):
+    # 24h Sun 20:00 → Fri 20:00 ET
+    if (dow == 6 and tod < time(20,0)) or (dow == 5 and tod >= time(20,0)):
         return "24h Closed"
-    if dow < 5 or (dow == 5 and tod < time(20,0)):
-        return "24h Open"
-    return "24h Closed"
+    return "24h Open"
 
 # ─── Streamlit App ────────────────────────────────────────────────────────────
 
 st.title("Live Intraday Trend & Pattern")
 
-ticker    = st.text_input("Ticker", "AAPL").upper()
-show_rsi  = st.checkbox("Show RSI", True)
-show_bb   = st.checkbox("Show Bollinger Bands", True)
-refresh   = st.slider("Refresh every N minutes", 1, 5, 1)
+ticker   = st.text_input("Ticker", "AAPL").upper()
+show_rsi = st.checkbox("Show RSI", True)
+show_bb  = st.checkbox("Show Bollinger Bands", True)
+refresh  = st.slider("Refresh every N minutes", 1, 5, 1)
 
 if st.button("Start Chart"):
     st.session_state.started = True
 
 if st.session_state.get("started", False):
-    df      = get_intraday(ticker)
-    df      = compute_indicators(df)
+    df       = get_intraday(ticker)
+    df       = compute_indicators(df)
     pattern, idx = detect_pattern(df)
 
     first, last = df["Close"].iloc[0], df["Close"].iloc[-1]
     color       = "green" if last >= first else "red"
-    # buy/sell/hold by trendline
-    sig = "BUY"  if last > df["Trend"].iloc[-1] \
-        else "SELL" if last < df["Trend"].iloc[-1] \
-        else "HOLD"
+    sig = "BUY" if last > df["Trend"].iloc[-1] else "SELL" if last < df["Trend"].iloc[-1] else "HOLD"
 
-    # ─── Plot ─────────────────────────
+    # ─── Plot ─────────────────────────────
     fig, (ax1, ax2) = plt.subplots(2,1, figsize=(12,6), sharex=True)
     ts = df.index
+
     ax1.plot(ts, df["Close"], color=color, label="Price")
     ax1.plot(ts, df["Trend"], "--", label="Trend")
     if show_bb:
@@ -120,9 +119,11 @@ if st.session_state.get("started", False):
     ax1.legend(loc="upper left")
 
     if show_rsi:
-        ax2.plot(ts, df["RSI"], color="orange", label="RSI", linewidth=1.5)
-        ax2.axhline(70, linestyle="--", alpha=0.6)
-        ax2.axhline(30, linestyle="--", alpha=0.6)
+        ax2.plot(ts, df["RSI"], color="orange", linewidth=2, label="RSI")
+        ax2.fill_between(ts, df["RSI"], 30, where=(df["RSI"]>=30)&(df["RSI"]<=70),
+                         color="orange", alpha=0.1)
+        ax2.axhline(70, "--", alpha=0.6)
+        ax2.axhline(30, "--", alpha=0.6)
         ax2.set_ylabel("RSI")
         ax2.legend(loc="upper left")
     else:
@@ -130,13 +131,16 @@ if st.session_state.get("started", False):
 
     st.pyplot(fig, clear_figure=True)
 
-    # ─── Info Panels ────────────────────
-    col1, col2, col3 = st.columns([1,5,2])
+    # ─── Info Panels ─────────────────────────
+    col1, _, col3 = st.columns([1,5,2])
     with col1:
-        st.header("Signal")
-        st.success(sig) if sig=="BUY" else st.error(sig) if sig=="SELL" else st.warning(sig)
-        status_line = f"{get_market_status()} -------- {get_24h_status()}"
-        st.info(status_line)
+        st.header("Signal & Market")
+        if   sig=="BUY":  st.success("BUY")
+        elif sig=="SELL": st.error("SELL")
+        else:             st.warning("HOLD")
+
+        # merged box
+        st.info(f"{get_market_status()}  --------  {get_24h_status()}")
         st.write(f"Last refresh: {datetime.now().strftime('%H:%M:%S')} — next in {refresh} min")
 
     with col3:
@@ -145,5 +149,4 @@ if st.session_state.get("started", False):
         st.subheader("Pattern Info")
         st.info(f"{pattern} pattern detected." if pattern!="None" else "No recognizable pattern.")
 
-    # rerun on interval
     st.experimental_rerun()
