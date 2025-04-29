@@ -3,222 +3,197 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 from datetime import datetime
 import pytz
 
-st.set_page_config(layout="wide")
+# --- Helper functions -----------------------------------------------
 
-@st.cache_data
-def get_intraday(ticker):
-    df = yf.download(
-        tickers=ticker,
-        period="1d",
-        interval="5m",
-        auto_adjust=True,
-        progress=False,
-    )
-    if df.empty:
-        raise ValueError(f"[Error] No price data found. Ticker may be invalid or delisted.")
-    return df
+@st.cache_data(ttl=60)
+def get_intraday(ticker: str):
+    """Download 1‐day, 1-minute data from Yahoo."""
+    data = yf.download(ticker, period="1d", interval="1m", progress=False)
+    data = data.dropna(how="any")
+    return data
 
-@st.cache_data
-def compute_indicators(df):
-    if len(df) < 2:
-        for col in ("Trend","BB_mid","BB_std","BB_upper","BB_lower","RSI"):
-            df[col] = np.nan
-        return df
-
+def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute linear trend, Bollinger Bands, RSI."""
+    # trend
     x = np.arange(len(df))
-    slope, inter = np.polyfit(x, df["Close"].values, 1)
-    df["Trend"] = slope * x + inter
+    slope, intercept = np.polyfit(x, df["Close"].values, 1)
+    df["Trend"] = slope * x + intercept
 
-    df["BB_mid"]   = df["Close"].rolling(20).mean()
-    df["BB_std"]   = df["Close"].rolling(20).std()
+    # Bollinger
+    rolling = df["Close"].rolling(20)
+    df["BB_mid"] = rolling.mean()
+    df["BB_std"] = rolling.std()
     df["BB_upper"] = df["BB_mid"] + 2 * df["BB_std"]
     df["BB_lower"] = df["BB_mid"] - 2 * df["BB_std"]
 
+    # RSI
     delta = df["Close"].diff()
-    up    = delta.clip(lower=0)
-    down  = -delta.clip(upper=0)
-    ma_up   = up.ewm(span=14, adjust=False).mean()
-    ma_down = down.ewm(span=14, adjust=False).mean()
-    rs = ma_up / ma_down
+    gain = delta.clip(lower=0)
+    loss = (-delta).clip(lower=0)
+    avg_gain = gain.rolling(14).mean()
+    avg_loss = loss.rolling(14).mean()
+    rs = avg_gain / avg_loss
     df["RSI"] = 100 - (100 / (1 + rs))
 
     return df
 
-def detect_pattern(df):
+def detect_pattern(df: pd.DataFrame):
+    """
+    Dummy “most recent pattern detector.”
+    Replace with your own logic, but must return:
+      - pattern_name: str
+      - index_of_pattern_end: int
+    """
+    # example: if price made two distinct peaks above trend line → double top
     closes = df["Close"].values
-    hi = np.where((closes > np.roll(closes,1)) & (closes > np.roll(closes,-1)))[0]
-    lo = np.where((closes < np.roll(closes,1)) & (closes < np.roll(closes,-1)))[0]
+    tops = np.argwhere((closes[1:-1] > closes[:-2]) & (closes[1:-1] > closes[2:])).flatten() + 1
+    if len(tops) >= 2:
+        return "Double top", tops[-1]
+    return "None", len(df) - 1
 
-    # Double top
-    if len(hi) >= 2:
-        h1,h2 = hi[-2], hi[-1]
-        if abs(closes[h1] - closes[h2]) / closes[h1] < 0.01:
-            return "Double top", h2
+def get_market_status(now=None):
+    """Regular NYSE hours: 9:30–16:00 ET."""
+    tz = pytz.timezone("US/Eastern")
+    now = now or datetime.now(tz)
+    if now.weekday() >= 5:
+        return "Closed"
+    t = now.time()
+    if t < datetime.strptime("09:30", "%H:%M").time():
+        return "Pre-Market"
+    if t < datetime.strptime("16:00", "%H:%M").time():
+        return "Open Trading"
+    return "After Hours"
 
-    # Triple top
-    if len(hi) >= 3:
-        h1,h2,h3 = hi[-3], hi[-2], hi[-1]
-        ref = closes[h1]
-        if all(abs(closes[h] - ref)/ref < 0.01 for h in (h2,h3)):
-            return "Triple top", h3
+def get_24h_status(now=None):
+    """
+    Some exchanges run Sun 20:00 ET – Fri 20:00 ET.
+    For simplicity we’ll mirror that.
+    """
+    tz = pytz.timezone("US/Eastern")
+    now = now or datetime.now(tz)
+    # day 6 = Saturday, 4 = Friday
+    if now.weekday() == 5 or (now.weekday() == 4 and now.time() >= datetime.strptime("20:00","%H:%M").time()):
+        return "24h Closed"
+    return "24h Open"
 
-    # Head & Shoulders
-    if len(hi) >= 3:
-        l,m,r = closes[hi[-3]], closes[hi[-2]], closes[hi[-1]]
-        if m>l and m>r and abs(l-r)/l<0.02:
-            return "Head & shoulders", hi[-2]
 
-    # Rising wedge
-    if len(hi)>=2 and len(lo)>=2:
-        sh,_ = np.polyfit(hi, closes[hi],1)
-        sl,_ = np.polyfit(lo, closes[lo],1)
-        if sh>0 and sl>0 and sl<sh:
-            return "Rising wedge", hi[-1]
+# --- Session State Setup --------------------------------------------
 
-    # Inverse H&S
-    if len(lo)>=3:
-        l,m,r = closes[lo[-3]], closes[lo[-2]], closes[lo[-1]]
-        if m<l and m<r and abs(l-r)/l<0.02:
-            return "Inverse H&S", lo[-2]
+for key, val in {
+    "started": False,
+    "ticker": "",
+    "rsi_on": True,
+    "bb_on": True,
+    "refresh": 1
+}.items():
+    if key not in st.session_state:
+        st.session_state[key] = val
 
-    # Double bottom
-    if len(lo)>=2:
-        b1,b2 = lo[-2], lo[-1]
-        if abs(closes[b1]-closes[b2])/closes[b1]<0.01:
-            return "Double bottom", b2
 
-    # Unique three river
-    if len(lo)>=3:
-        l,m,r = closes[lo[-3]], closes[lo[-2]], closes[lo[-1]]
-        if l>m<r:
-            return "Unique three river", lo[-1]
+# --- UI: Settings Screen --------------------------------------------
 
-    # Falling wedge
-    if len(hi)>=2 and len(lo)>=2:
-        sh,_ = np.polyfit(hi, closes[hi],1)
-        sl,_ = np.polyfit(lo, closes[lo],1)
-        if sh<0 and sl<0 and sl>sh:
-            return "Falling wedge", lo[-1]
-
-    return "None", None
-
-def get_market_status():
-    now = datetime.now(pytz.timezone("US/Eastern"))
-    if now.weekday()<5 and 9<=now.hour<16:
-        return "Market Open"
-    if now.weekday()<5:
-        return "After Hours Trading"
-    return "Market Closed"
-
-def get_24h_status():
-    now = datetime.now(pytz.timezone("US/Eastern"))
-    if (now.weekday()==6 and now.hour>=20) or now.weekday()<4 or (now.weekday()==4 and now.hour<20):
-        return "24h Markets Open"
-    return "24h Markets Closed"
-
+st.set_page_config(layout="wide")
 st.title("📈 Intraday Trend & Pattern Scanner")
 
-if "started" not in st.session_state:
-    st.session_state.started = False
-
-# --- Settings Screen ---
 if not st.session_state.started:
-    ticker      = st.text_input("Ticker", "AAPL").upper()
-    rsi_on      = st.checkbox("Show RSI", True)
-    bb_on       = st.checkbox("Show Bollinger Bands", True)
-    refresh_min = st.slider("Refresh every N minutes", 1, 5, 1)
+    ticker_input = st.text_input("Ticker (e.g. AAPL)").upper()
+    rsi_input    = st.checkbox("Show RSI", value=True)
+    bb_input     = st.checkbox("Show Bollinger Bands", value=True)
+    refresh_input = st.slider("Refresh every N minutes", 1, 5, 1)
 
-    if st.button("Start Chart"):
-        st.session_state.started = True
-        st.session_state.ticker  = ticker
-        st.session_state.rsi_on  = rsi_on
-        st.session_state.bb_on   = bb_on
-        st.session_state.refresh = refresh_min
+    if st.button("▶ Start Chart"):
+        if not ticker_input:
+            st.error("Please enter a ticker symbol.")
+        else:
+            st.session_state.started = True
+            st.session_state.ticker  = ticker_input
+            st.session_state.rsi_on  = rsi_input
+            st.session_state.bb_on   = bb_input
+            st.session_state.refresh = refresh_input
+            st.experimental_rerun()
 
-    st.stop()
-
-# --- Chart Screen ---
-ticker  = st.session_state.ticker
-rsi_on  = st.session_state.rsi_on
-bb_on   = st.session_state.bb_on
-refresh = st.session_state.refresh
-
-if st.button("← Back to Settings"):
-    st.session_state.started = False
-    try:
+else:
+    # --- Back Button & Load Settings -------------------------------
+    if st.button("← Back to Settings"):
+        st.session_state.started = False
         st.experimental_rerun()
-    except AttributeError:
-        st.stop()
 
-try:
-    df          = get_intraday(ticker)
-    df          = compute_indicators(df)
-    pattern, _  = detect_pattern(df)
-    first       = float(df["Close"].iloc[0])
-    last        = float(df["Close"].iloc[-1])
-    sig         = (
-        "BUY"  if last > df["Trend"].iloc[-1] else
-        "SELL" if last < df["Trend"].iloc[-1] else
-        "HOLD"
+    ticker = st.session_state.ticker
+    rsi_on  = st.session_state.rsi_on
+    bb_on   = st.session_state.bb_on
+    refresh = st.session_state.refresh
+
+    # --- Data Fetch & Indicators -----------------------------------
+    df = get_intraday(ticker)
+    df = compute_indicators(df)
+    pattern, pat_idx = detect_pattern(df)
+    first = float(df["Close"].iloc[0])
+    last  = float(df["Close"].iloc[-1])
+
+    # --- PLOT: Shared X-Axis with tight layout ---------------------
+    fig, (ax1, ax2) = plt.subplots(
+        nrows=2,
+        ncols=1,
+        sharex=True,
+        figsize=(14, 7),
+        gridspec_kw={"height_ratios": [3, 1]},
+        constrained_layout=True
     )
-except Exception as e:
-    st.error(e)
-    st.stop()
 
-col1, col2, col3 = st.columns([1,4,1])
-
-with col1:
-    st.markdown("## Signal & Market")
-    st.markdown(f"""
-    <div style="background:#2c2f33;padding:1rem;border-radius:0.5rem;text-align:center;">
-      <h2 style="color:white;margin:0;">{sig}</h2>
-      <p style="color:#b0bec5;margin:0;">
-        {get_market_status()}<br>
-        --------<br>
-        {get_24h_status()}
-      </p>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col2:
-    fig, (ax1, ax2) = plt.subplots(2,1, figsize=(14,6), sharex=True,
-                                   gridspec_kw={"height_ratios":[2,1]})
-    color = "green" if last>=first else "red"
-    ax1.plot(df.index, df["Close"], color=color, label="Price")
+    # Price + Trend + Bollinger
+    color = "green" if last >= first else "red"
+    ax1.plot(df.index, df["Close"], color=color, linewidth=1.5, label="Price")
     ax1.plot(df.index, df["Trend"], "--", linewidth=1, label="Trend")
     if bb_on:
-        ax1.plot(df.index, df["BB_upper"], ":", label="Bollinger Upper")
-        ax1.plot(df.index, df["BB_lower"], ":", label="Bollinger Lower")
+        ax1.plot(df.index, df["BB_upper"], ":", linewidth=1, label="Boll Upper")
+        ax1.plot(df.index, df["BB_lower"], ":", linewidth=1, label="Boll Lower")
     ax1.set_ylabel("Price (USD)")
     ax1.legend(loc="upper left")
-    ax1.set_title(f"{ticker} – Daily Change: {last-first:+.2f}")
+    ax1.grid(True)
 
+    # RSI Panel
     if rsi_on:
-        ax2.plot(df.index, df["RSI"], color="#FF9800", label="RSI")
-        ax2.axhline(70, linestyle="--", alpha=0.5)
-        ax2.axhline(30, linestyle="--", alpha=0.5)
+        ax2.plot(df.index, df["RSI"], color="orange", linewidth=1.5, label="RSI")
+        ax2.axhline(70, "--", alpha=0.5)
+        ax2.axhline(30, "--", alpha=0.5)
         ax2.set_ylabel("RSI")
         ax2.legend(loc="upper left")
+        ax2.grid(True)
 
-    plt.xticks(rotation=30)
-    plt.tight_layout(pad=2)
-    st.pyplot(fig, use_container_width=True)
+    # X-axis datetime formatting
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    ax2.xaxis.set_major_locator(mdates.AutoDateLocator())
+    fig.suptitle(f"{ticker} – Daily Change: {last - first:+.2f}", fontsize=14)
 
-    next_in = refresh*60 - (datetime.now().second % (refresh*60))
-    st.markdown(f"*Last refresh:* {datetime.now():%H:%M:%S} — *next in* {next_in//60} min")
+    st.pyplot(fig)
 
-with col3:
-    st.markdown("## Info Panels")
-    st.markdown(f"""
-      <div style="background:#233044;padding:1rem;border-radius:0.5rem;">
-        <strong style="color:white;">Uptrend Detected</strong><br>
-        <span style="color:#b0bec5;">trend: price is rising.</span>
-      </div>
-      <div style="background:#4a442f;padding:1rem;border-radius:0.5rem;margin-top:1rem;">
-        <strong style="color:#e6e183;">{pattern} Detected</strong><br>
-        <span style="color:#b8a94a;">pattern: {pattern}.</span>
-      </div>
-    """, unsafe_allow_html=True)
+    # --- Signal Box -------------------------------------------------
+    # Compare last vs. trend endpoint
+    trend_end = df["Trend"].iloc[-1]
+    sig = (
+        "BUY"  if last > trend_end else
+        "SELL" if last < trend_end else
+        "HOLD"
+    )
+    st.markdown("### Signal")
+    st.warning(sig, icon="⚡️")
+
+    # --- Market Status Box -----------------------------------------
+    status_str = f"{get_market_status()}   --------   {get_24h_status()}"
+    st.markdown("### Market Status")
+    st.info(status_str)
+
+    # --- Info Panels ------------------------------------------------
+    updown = "price is rising" if last >= first else "price is falling"
+    st.markdown("### Info Panels")
+    st.success(f"Uptrend Detected\ntrend: {updown}.")
+    st.success(f"{pattern} Detected\npattern: {pattern}.")
+
+    # --- Auto-refresh Timer ----------------------------------------
+    now = datetime.now(pytz.timezone("US/Eastern")).strftime("%H:%M:%S")
+    st.write(f"*Last refresh:* {now} — *next in* {refresh} min")
+    st.experimental_rerun(interval=refresh * 60)
