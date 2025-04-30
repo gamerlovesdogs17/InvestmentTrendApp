@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from datetime import datetime, time
 import pytz
 
-# ----- full‐page rerun shim for Streamlit 1.45+ ------------------------------
+# ----- full-page rerun shim for Streamlit 1.45+ ------------------------------
 try:
     from streamlit.runtime.scriptrunner.script_runner import RerunException
     def rerun():
@@ -19,9 +19,34 @@ except ImportError:
 
 @st.cache_data(ttl=60)
 def get_intraday(ticker: str) -> pd.DataFrame:
-    df = yf.download(ticker, period="1d", interval="1m", progress=False)
-    df = df[df["Close"].notna()]
-    return df
+    """
+    Download the last 2 days of 1m bars, then:
+      • If there are bars for today, return those.
+      • Otherwise fall back to the most recent prior day.
+    """
+    eastern = pytz.timezone("US/Eastern")
+    now_et = datetime.now(eastern)
+    today = now_et.date()
+
+    df = (
+        yf.download(ticker, period="2d", interval="1m", progress=False)
+          .dropna(subset=["Close"])
+    )
+    if df.empty:
+        return df
+
+    # make the index tz-aware in ET
+    df = df.tz_localize("UTC").tz_convert(eastern)
+
+    # attempt to pull today's bars
+    df_today = df[df.index.date == today]
+    if not df_today.empty:
+        return df_today
+
+    # otherwise fall back to the last available day
+    last_day = df.index.date.max()
+    return df[df.index.date == last_day]
+
 
 def compute_rsi(prices: pd.Series, period: int = 14) -> pd.Series:
     delta = prices.diff()
@@ -31,6 +56,7 @@ def compute_rsi(prices: pd.Series, period: int = 14) -> pd.Series:
     avg_loss = loss.rolling(period).mean()
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
+
 
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     x = np.arange(len(df))
@@ -45,9 +71,11 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["RSI"] = compute_rsi(df["Close"])
     return df
 
+
 def detect_pattern(df: pd.DataFrame) -> tuple[str,int|None]:
-    # stub → replace with your real pattern‐detection
+    # ← your pattern‐detection goes here (head&shoulders, wedges, etc.)
     return "None", None
+
 
 # ----- market status ----------------------------------------------------------
 
@@ -60,10 +88,12 @@ def get_market_status() -> str:
         return "After Hours Trading"
     return "Market Closed"
 
+
 def get_24h_status() -> str:
     eastern = pytz.timezone("US/Eastern")
     now = datetime.now(eastern)
     wd, t = now.weekday(), now.time()
+    # Sun 20:00 ET – Fri 20:00 ET is “open”
     if wd < 4:
         return "Open"
     if wd == 4:
@@ -72,17 +102,19 @@ def get_24h_status() -> str:
         return "Open" if t >= time(20,0) else "Closed"
     return "Closed"
 
+
 # ----- session_state init ----------------------------------------------------
 
-for key, val in {
+for k,v in {
     "started": False,
     "ticker": "",
     "rsi_on": True,
     "bb_on": True,
     "refresh": 1
 }.items():
-    if key not in st.session_state:
-        st.session_state[key] = val
+    if k not in st.session_state:
+        st.session_state[k] = v
+
 
 # ----- SETTINGS SCREEN -------------------------------------------------------
 
@@ -103,6 +135,7 @@ if not st.session_state.started:
             "started": True
         })
         rerun()
+
 
 # ----- CHART SCREEN ----------------------------------------------------------
 
@@ -139,8 +172,8 @@ else:
 
     # — plot —
     fig, (ax1, ax2) = plt.subplots(2,1, figsize=(14,6), sharex=True)
-    color = "green" if last >= first else "red"
-    ax1.plot(df.index, df["Close"], color=color, label="Price")
+    price_color = "green" if last >= first else "red"
+    ax1.plot(df.index, df["Close"], color=price_color, label="Price")
     ax1.plot(df.index, df["Trend"], "--", label="Trend")
     if bb_on:
         ax1.plot(df.index, df["BollingerUpper"], ":", label="Boll Upper")
@@ -178,19 +211,19 @@ else:
         )
 
     with c2:
-        tt = "rising" if last >= first else "falling"
+        trend_txt = "rising" if last >= first else "falling"
         st.markdown(
             "<div style='background:#023;color:#eef;"
             "padding:12px;border-radius:4px'>"
             f"<strong>🌟 Trend Detected</strong><br>"
-            f"trend: price is {tt}.</div>",
+            f"trend: price is {trend_txt}.</div>",
             unsafe_allow_html=True
         )
-        lk = "" if pattern=="None" else "🔗"
+        link_icon = "" if pattern=="None" else "🔗"
         st.markdown(
             "<div style='background:#432;color:#ffd;"
             "padding:12px;border-radius:4px'>"
-            f"<strong>🔍 Pattern Detected {lk}</strong><br>"
+            f"<strong>🔍 Pattern Detected {link_icon}</strong><br>"
             f"pattern: {pattern}"
             f"{'' if idx is None else f' (at idx {idx})'}"
             "</div>",
