@@ -1,280 +1,203 @@
-import random, json
-import matplotlib.pyplot as plt
+import streamlit as st
+import yfinance as yf
 import pandas as pd
 import numpy as np
-import ipywidgets as widgets
-from IPython.display import display, clear_output
+import matplotlib.pyplot as plt
+from datetime import datetime, time
+import pytz
 
-# ─── Configuration Menu ───
-turns_slider      = widgets.IntSlider(value=25, min=5, max=50, step=1,   description='Turns:')
-volatility_slider = widgets.FloatSlider(value=0.02, min=0.0, max=0.10, step=0.005, description='Volatility:')
-event_freq_slider = widgets.FloatSlider(value=0.15, min=0.0, max=0.50, step=0.01,  description='Event Freq:')
-commission_slider = widgets.FloatSlider(value=0.001, min=0.0, max=0.01, step=0.0005, description='Commission:')
-slippage_slider   = widgets.FloatSlider(value=0.002, min=0.0, max=0.01, step=0.0005, description='Slippage:')
-start_button      = widgets.Button(description='Start Game', button_style='success')
+# ── Full-page rerun shim for Streamlit 1.45+ ────────────────────────────────
+try:
+    from streamlit.runtime.scriptrunner.script_runner import RerunException
+    def rerun():
+        raise RerunException({})
+except ImportError:
+    def rerun():
+        st.experimental_rerun()
 
-display(widgets.VBox([
-    widgets.Label("🏁 Configure Game Settings"),
-    turns_slider,
-    volatility_slider,
-    event_freq_slider,
-    commission_slider,
-    slippage_slider,
-    start_button
-]))
+# ── Data Fetching & Indicators ──────────────────────────────────────────────
 
-# ─── Globals to be set on start ───
-MAX_TURNS       = None
-volatility      = None
-event_freq      = None
-commission_rate = None
-slippage_rate   = None
+@st.cache_data(ttl=60)
+def get_intraday(ticker: str) -> pd.DataFrame:
+    df = yf.download(ticker, period="1d", interval="1m", progress=False).dropna()
+    return df
 
-# ─── Placeholders for game state ───
-cash = 0.0
-stocks = {}
-sector_map = {}
-portfolio = {}
-turn = 0
-history = []
-price_hist = {}
-scheduled_event = None
-event_log = []
-trade_count = 0
-limit_orders = []
-stop_orders = []
-achievements = set()
+def compute_rsi(prices: pd.Series, period: int = 14) -> pd.Series:
+    delta = prices.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.rolling(period).mean()
+    avg_loss = loss.rolling(period).mean()
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
 
-# ─── Core Functions ───
-def port_value():
-    return cash + sum(stocks[t]*q for t,q in portfolio.items())
+def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    x = np.arange(len(df))
+    slope, intercept = np.polyfit(x, df["Close"].values, 1)
+    df["Trend"] = slope * x + intercept
 
-def apply_fees_slippage(ticker, qty, is_buy):
-    global cash
-    price = stocks[ticker]
-    cost  = price*qty
-    fee   = cost*commission_rate
-    slip  = cost*slippage_rate
-    if is_buy and cash >= cost+fee+slip:
-        cash -= cost+fee+slip
-        portfolio[ticker] += qty
-        return True
-    if (not is_buy) and portfolio[ticker] >= qty:
-        cash += cost-fee-slip
-        portfolio[ticker] -= qty
-        return True
-    return False
+    m20 = df["Close"].rolling(20).mean()
+    s20 = df["Close"].rolling(20).std()
+    df["BollingerUpper"] = m20 + 2 * s20
+    df["BollingerLower"] = m20 - 2 * s20
 
-def process_orders():
-    for order in limit_orders[:]:
-        t,qty,pr,is_buy = order
-        if (is_buy and stocks[t] <= pr) or (not is_buy and stocks[t] >= pr):
-            if apply_fees_slippage(t, qty, is_buy):
-                event_log.append(f"{'Buy' if is_buy else 'Sell'} limit {qty}×{t}@{pr}")
-                limit_orders.remove(order)
-    for order in stop_orders[:]:
-        t,qty,sp,is_buy = order
-        cond = (is_buy and stocks[t] >= sp) or (not is_buy and stocks[t] <= sp)
-        if cond and apply_fees_slippage(t, qty, not is_buy):
-            event_log.append(f"{'Sell' if not is_buy else 'Buy'} stop {qty}×{t}@{sp}")
-            stop_orders.remove(order)
+    df["RSI"] = compute_rsi(df["Close"])
+    return df.dropna()
 
-def simulate():
-    global turn, scheduled_event
-    turn += 1
-    # half-event
-    if scheduled_event:
-        ev = scheduled_event
-        half = ev['change']/2
-        for t in price_hist:
-            if sector_map[t]==ev['sector']:
-                stocks[t] = round(stocks[t]*(1+half),2)
-        ev['turns_left'] -= 1
-        event_log.append(f"{ev['name']} half @turn{turn}")
-    # random + momentum
-    for t,h in price_hist.items():
-        last = h[-1]
-        if len(h)>1:
-            delta = last - h[-2]
-            change = random.uniform(0,volatility) if delta>0 else random.uniform(-volatility,0)
-        else:
-            change = random.uniform(-volatility,volatility)
-        new = round(stocks[t]*(1+change),2)
-        stocks[t], h[:] = new, h+[new]
-    # second half
-    if scheduled_event and scheduled_event['turns_left']==0:
-        event_log.append(f"{scheduled_event['name']} 2nd half @turn{turn}")
-        scheduled_event = None
-    process_orders()
-    history.append(port_value())
+def detect_pattern(df: pd.DataFrame) -> tuple[str, int | None]:
+    # Stub: replace with your actual pattern logic
+    close = df["Close"].values
+    peaks = np.where((close[1:-1] > close[:-2]) & (close[1:-1] > close[2:]))[0] + 1
+    if len(peaks) >= 3 and abs(close[peaks[-1]] - close[peaks[-3]]) < 0.02 * close[peaks[-3]]:
+        return "Triple top", peaks[-3]
+    if len(peaks) >= 2 and abs(close[peaks[-1]] - close[peaks[-2]]) < 0.015 * close[peaks[-2]]:
+        return "Double top", peaks[-2]
+    return "None", None
 
-def maybe_schedule():
-    global scheduled_event
-    if scheduled_event is None and random.random()<event_freq:
-        ev = random.choice([
-            {'name':'Tech Rally','sector':'Tech','change':0.10,'blurb':'Tech earnings beat.'},
-            {'name':'Consumer Slump','sector':'Consumer','change':-0.10,'blurb':'Consumer dip.'}
-        ]).copy()
-        ev['turns_left']=2
-        scheduled_event=ev
-        event_log.append(f"Scheduled {ev['name']} next turn")
+# ── Market Hours ────────────────────────────────────────────────────────────
 
-def check_achievements():
-    roi=(port_value()-10000)/10000
-    if port_value()>=2*10000 and 'DoubleUp' not in achievements:
-        achievements.add('DoubleUp'); event_log.append("Achievement: Doubled money")
-    if trade_count>=10 and 'TenTrades' not in achievements:
-        achievements.add('TenTrades'); event_log.append("Achievement: 10 trades")
+def get_market_status() -> str:
+    tz = pytz.timezone("US/Eastern")
+    now = datetime.now(tz).time()
+    if time(9, 30) <= now <= time(16, 0):
+        return "Market Open"
+    if time(16, 0) < now <= time(20, 0):
+        return "After Hours Trading"
+    return "Market Closed"
 
-def end_game():
-    for w in all_widgets: w.disabled=True
-    final=port_value(); roi=(final-10000)/10000
-    stars=1+(roi>=0.10)+(roi>=0.20); bonus=' ⭐' if roi>0.20 else ''
-    clear_output()
-    print("🎉 GAME OVER 🎉")
-    print(f"Turns: {turn}/{MAX_TURNS}  Trades: {trade_count}")
-    print(f"Value: ${final:.2f}  ROI: {roi*100:+.2f}%  Rating: {'★'*stars}{bonus}\n")
-    if event_log:
-        print("Log:")
-        for e in event_log: print("•",e)
-    df=pd.DataFrame({'Price':stocks,'Shares':portfolio})
-    print("\nFinal Portfolio:"); display(df)
-    sec={}
-    for t,q in portfolio.items():
-        sec.setdefault(sector_map[t],0)
-        sec[sector_map[t]]+=stocks[t]*q
-    if sec:
-        fig,ax=plt.subplots(figsize=(4,4))
-        ax.pie(sec.values(), labels=sec.keys(), autopct='%1.1f%%', wedgeprops={'width':0.4})
-        ax.set_title("Sector Allocation"); plt.show()
+def get_24h_status() -> str:
+    tz = pytz.timezone("US/Eastern")
+    now = datetime.now(tz)
+    wd, t = now.weekday(), now.time()
+    # Sun 20:00 → Fri 20:00
+    if wd < 4:
+        return "24h Markets Open"
+    if wd == 4:
+        return "24h Open" if t < time(20, 0) else "24h Closed"
+    if wd == 6:
+        return "24h Open" if t >= time(20, 0) else "24h Closed"
+    return "24h Closed"
 
-# ─── UI Refresh & Controls ───
-output = widgets.Output(layout={'border':'1px solid gray'})
+# ── Session State Initialization ───────────────────────────────────────────
 
-action_dd   = widgets.Dropdown(options=['Buy','Sell'], description='Action:')
-stock_dd    = widgets.Dropdown(options=[],            description='Stock:')
-qty         = widgets.BoundedIntText(value=1, min=1, max=100, description='Qty:')
-limit_price = widgets.FloatText(description='Limit $')
-stop_price  = widgets.FloatText(description='Stop $')
-go_btn      = widgets.Button(description='Go!', button_style='primary')
-limit_btn   = widgets.Button(description='Set Limit')
-stop_btn    = widgets.Button(description='Set Stop')
-hold_btn    = widgets.Button(description='Holdings')
-sect_btn    = widgets.Button(description='Sectors')
-save_btn    = widgets.Button(description='Save')
-load_btn    = widgets.Button(description='Load')
+if "started" not in st.session_state:
+    st.session_state.started = False
+if "ticker" not in st.session_state:
+    st.session_state.ticker = ""
+if "rsi_on" not in st.session_state:
+    st.session_state.rsi_on = True
+if "bb_on" not in st.session_state:
+    st.session_state.bb_on = True
+if "refresh" not in st.session_state:
+    st.session_state.refresh = 1
 
-def refresh():
-    output.clear_output()
-    if scheduled_event and scheduled_event['turns_left']==2:
-        print("🔔", scheduled_event['name'], "-", scheduled_event['blurb'])
-    pv=port_value(); prev=history[-2] if len(history)>1 else pv
-    pct=(pv-prev)/prev*100 if prev else 0; icon='🟢' if pct>=0 else '🔴'
-    with output:
-        print(f"Turn {turn}/{MAX_TURNS} | Cash ${cash:.2f} | Value ${pv:.2f} ({pct:+.2f}%){icon}")
-        df=pd.DataFrame({'Price':stocks,'Shares':portfolio})
-        display(df)
-        color='green' if pv>=10000 else 'red'
-        plt.figure(figsize=(5,3)); plt.plot(history,marker='o',color=color); plt.grid(True); plt.show()
+# ── Settings Screen ────────────────────────────────────────────────────────
 
-def on_go(_):
-    global trade_count
-    act, t, q = action_dd.value, stock_dd.value, qty.value
-    if apply_fees_slippage(t,q,act=='Buy'):
-        trade_count+=1; event_log.append(f"{act} {q}×{t}@turn{turn}")
-    simulate(); maybe_schedule(); check_achievements()
-    if turn>=MAX_TURNS: end_game()
-    else: refresh()
+if not st.session_state.started:
+    st.title("📈 Intraday Trend & Pattern Scanner")
+    t_in   = st.text_input("Ticker (e.g. AAPL)", st.session_state.ticker)
+    r_in   = st.checkbox("Show RSI", st.session_state.rsi_on)
+    bb_in  = st.checkbox("Show Bollinger Bands", st.session_state.bb_on)
+    rf_in  = st.slider("Refresh every N minutes", 1, 5, st.session_state.refresh)
+    if st.button("▶️ Start Chart"):
+        st.session_state.ticker  = t_in.upper().strip()
+        st.session_state.rsi_on  = r_in
+        st.session_state.bb_on   = bb_in
+        st.session_state.refresh = rf_in
+        st.session_state.started = True
+        rerun()
+    st.stop()
 
-def on_limit(_):
-    limit_orders.append((stock_dd.value, qty.value, limit_price.value, action_dd.value=='Buy'))
-    event_log.append("Limit set")
+# ── Chart Screen ───────────────────────────────────────────────────────────
 
-def on_stop(_):
-    stop_orders.append((stock_dd.value, qty.value, stop_price.value, action_dd.value!='Buy'))
-    event_log.append("Stop set")
+st.title("📈 Intraday Trend & Pattern Scanner")
+if st.button("← Back to Settings"):
+    st.session_state.started = False
+    rerun()
 
-def show_holdings(_):
-    refresh()
-    labels=[t for t,q in portfolio.items() if q>0]
-    sizes =[stocks[t]*q for t,q in portfolio.items() if q>0]
-    if sizes:
-        fig,ax=plt.subplots(figsize=(4,4))
-        ax.pie(sizes,labels=labels,autopct='%1.1f%%',wedgeprops={'width':0.4}); plt.show()
+ticker  = st.session_state.ticker
+rsi_on  = st.session_state.rsi_on
+bb_on   = st.session_state.bb_on
+refresh = st.session_state.refresh
 
-def show_sectors(_):
-    refresh()
-    sec={}
-    for t,q in portfolio.items():
-        sec.setdefault(sector_map[t],0)
-        sec[sector_map[t]]+=stocks[t]*q
-    labels,sizes=list(sec.keys()),list(sec.values())
-    if sizes:
-        fig,ax=plt.subplots(figsize=(4,4))
-        ax.pie(sizes,labels=labels,autopct='%1.1f%%',wedgeprops={'width':0.4}); plt.show()
+# Fetch & fallback
+df_new = get_intraday(ticker)
+if df_new.empty:
+    if "last_df" in st.session_state:
+        df = st.session_state.last_df.copy()
+        stale = True
+    else:
+        st.error(f"No intraday data available for '{ticker}'.")
+        st.stop()
+else:
+    df = df_new
+    st.session_state.last_df = df.copy()
+    stale = False
 
-def on_save(_):
-    state = dict(cash=cash, portfolio=portfolio, stocks=stocks,
-                 turn=turn, history=history, price_hist=price_hist,
-                 event_log=event_log, trade_count=trade_count)
-    with open('game_save.json','w') as f: json.dump(state,f)
-    event_log.append("Game saved.")
+# Compute
+df = compute_indicators(df)
+pattern, idx = detect_pattern(df)
+first, last = df["Close"].iloc[0], df["Close"].iloc[-1]
+signal = "BUY" if last > first else "SELL" if last < first else "HOLD"
 
-def on_load(_):
-    global cash,portfolio,stocks,turn,history,price_hist,event_log,trade_count
-    s=json.load(open('game_save.json'))
-    cash,portfolio,stocks = s['cash'],s['portfolio'],s['stocks']
-    turn,history,price_hist = s['turn'],s['history'],s['price_hist']
-    event_log,trade_count  = s['event_log'],s['trade_count']
-    refresh()
+# Plot
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 7), sharex=True,
+                               gridspec_kw={"height_ratios":[2,1]})
+price_color = "green" if signal=="BUY" else "red" if signal=="SELL" else "gray"
+ax1.plot(df.index, df["Close"], color=price_color, label="Price")
+ax1.plot(df.index, df["Trend"], "--", color="tab:blue", label="Trend")
+if bb_on:
+    ax1.plot(df.index, df["BollingerUpper"], ":", color="tab:orange", label="Boll Upper")
+    ax1.plot(df.index, df["BollingerLower"], ":", color="tab:green",  label="Boll Lower")
+ax1.set_ylabel("Price (USD)")
+ax1.legend(loc="upper left", fontsize="small")
+ax1.set_title(f"{ticker}  Daily Change: {last - first:+.2f}")
 
-go_btn   .on_click(on_go)
-limit_btn.on_click(on_limit)
-stop_btn .on_click(on_stop)
-hold_btn .on_click(show_holdings)
-sect_btn .on_click(show_sectors)
-save_btn .on_click(on_save)
-load_btn .on_click(on_load)
+if rsi_on:
+    ax2.plot(df.index, df["RSI"], color="tab:orange", label="RSI")
+    ax2.axhline(70, "--", alpha=0.5)
+    ax2.axhline(30, "--", alpha=0.5)
+    ax2.set_ylabel("RSI")
+    ax2.legend(loc="upper left", fontsize="small")
 
-all_widgets = [action_dd,stock_dd,qty,go_btn,limit_price,limit_btn,
-               stop_price,stop_btn,hold_btn,sect_btn,save_btn,load_btn]
+st.pyplot(fig, use_container_width=True)
 
-controls = widgets.VBox([output, widgets.HBox(all_widgets)])
+# Panels
+col1, col2 = st.columns([1, 3])
+with col1:
+    st.markdown(
+        f"<div style='background:{price_color};color:#fff;padding:16px;"
+        "text-align:center;border-radius:6px'><h2>{signal}</h2></div>",
+        unsafe_allow_html=True
+    )
+    st.markdown(
+        f"<div style='background:#1e293b;color:#fff;padding:10px;border-radius:6px'>"
+        f"⏰ {get_market_status()}<br>──────────<br>🌐 {get_24h_status()}"
+        "</div>",
+        unsafe_allow_html=True
+    )
 
-def start_game(_):
-    global MAX_TURNS, volatility, event_freq, commission_rate, slippage_rate
-    MAX_TURNS       = turns_slider.value
-    volatility      = volatility_slider.value
-    event_freq      = event_freq_slider.value
-    commission_rate = commission_slider.value
-    slippage_rate   = slippage_slider.value
+with col2:
+    trend_txt = "rising" if last >= first else "falling"
+    st.markdown(
+        "<div style='background:#0e3c86;color:#fff;padding:12px;border-radius:6px;"
+        "margin-bottom:12px'>🌟 <strong>Trend Detected</strong><br>"
+        f"trend: price is {trend_txt}."
+        "</div>",
+        unsafe_allow_html=True
+    )
+    st.markdown(
+        "<div style='background:#4b3b0a;color:#ffd;padding:12px;border-radius:6px'>"
+        "🔍 <strong>Pattern Detected</strong><br>"
+        f"pattern: {pattern}{'' if idx is None else f' (at idx {idx})'}."
+        "</div>",
+        unsafe_allow_html=True
+    )
 
-    # initialize game state
-    global cash, stocks, sector_map, portfolio, turn, history, price_hist
-    global scheduled_event, event_log, trade_count, limit_orders, stop_orders, achievements
-    cash            = 10000.00
-    stocks          = {'AAPL':150,'MSFT':300,'AMZN':3300}
-    sector_map      = {'AAPL':'Tech','MSFT':'Tech','AMZN':'Consumer'}
-    portfolio       = {t:0 for t in stocks}
-    turn            = 0
-    history         = []
-    price_hist      = {t:[p] for t,p in stocks.items()}
-    scheduled_event = None
-    event_log       = []
-    trade_count     = 0
-    limit_orders    = []
-    stop_orders     = []
-    achievements    = set()
+# Stale warning & next refresh
+if stale:
+    st.warning("🔃 No new data — showing last available intraday snapshot.")
+st.markdown(f"*Last refresh: {datetime.now(pytz.timezone('US/Eastern')).strftime('%H:%M:%S')} — next in {refresh} min*")
 
-    clear_output(wait=True)
-    display(controls)
-
-    # populate stock dropdown
-    stock_dd.options = list(stocks.keys())
-
-    # start
-    history.append(port_value())
-    simulate()
-    refresh()
-
-start_button.on_click(start_game)
+# Auto-refresh
+st.experimental_rerun()
