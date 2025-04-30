@@ -20,14 +20,13 @@ except ImportError:
 @st.cache_data(ttl=60)
 def get_intraday(ticker: str) -> pd.DataFrame:
     df = yf.download(ticker, period="1d", interval="1m", progress=False)
-    # only drop rows missing a Close price (so we keep any valid bar)
     df = df[df["Close"].notna()]
     return df
 
 def compute_rsi(prices: pd.Series, period: int = 14) -> pd.Series:
     delta = prices.diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
+    gain  = delta.clip(lower=0)
+    loss  = -delta.clip(upper=0)
     avg_gain = gain.rolling(period).mean()
     avg_loss = loss.rolling(period).mean()
     rs = avg_gain / avg_loss
@@ -46,14 +45,8 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["RSI"] = compute_rsi(df["Close"])
     return df
 
-def detect_pattern(df: pd.DataFrame) -> tuple[str, int | None]:
-    """
-    Stub for eight patterns:
-      Head & Shoulders, Double Top, Triple Top, Rising Wedge,
-      Inverse Head & Shoulders, Double Bottom, Unique Three River, Falling Wedge.
-    Returns (name, index_of_pattern_start) or ("None", None).
-    """
-    # → your real detection code goes here
+def detect_pattern(df: pd.DataFrame) -> tuple[str,int|None]:
+    # stub → replace with your real pattern‐detection
     return "None", None
 
 # ----- market status ----------------------------------------------------------
@@ -71,7 +64,6 @@ def get_24h_status() -> str:
     eastern = pytz.timezone("US/Eastern")
     now = datetime.now(eastern)
     wd, t = now.weekday(), now.time()
-    # 24h market window: Sun 20:00 ET → Fri 20:00 ET
     if wd < 4:
         return "Open"
     if wd == 4:
@@ -82,32 +74,34 @@ def get_24h_status() -> str:
 
 # ----- session_state init ----------------------------------------------------
 
-if "started" not in st.session_state:
-    st.session_state.started = False
-if "ticker" not in st.session_state:
-    st.session_state.ticker = ""
-if "rsi_on" not in st.session_state:
-    st.session_state.rsi_on = True
-if "bb_on" not in st.session_state:
-    st.session_state.bb_on = True
-if "refresh" not in st.session_state:
-    st.session_state.refresh = 1
+for key, val in {
+    "started": False,
+    "ticker": "",
+    "rsi_on": True,
+    "bb_on": True,
+    "refresh": 1
+}.items():
+    if key not in st.session_state:
+        st.session_state[key] = val
 
 # ----- SETTINGS SCREEN -------------------------------------------------------
 
 if not st.session_state.started:
     st.title("📈 Intraday Trend & Pattern Scanner")
+
     t_input  = st.text_input("Ticker (e.g. AAPL)", st.session_state.ticker)
     r_input  = st.checkbox("Show RSI", st.session_state.rsi_on)
     bb_input = st.checkbox("Show Bollinger Bands", st.session_state.bb_on)
     rf_input = st.slider("Refresh every N minutes", 1, 5, st.session_state.refresh)
 
     if st.button("▶️ Start Chart"):
-        st.session_state.ticker  = t_input.upper()
-        st.session_state.rsi_on  = r_input
-        st.session_state.bb_on   = bb_input
-        st.session_state.refresh = rf_input
-        st.session_state.started = True
+        st.session_state.update({
+            "ticker":  t_input.upper(),
+            "rsi_on":  r_input,
+            "bb_on":   bb_input,
+            "refresh": rf_input,
+            "started": True
+        })
         rerun()
 
 # ----- CHART SCREEN ----------------------------------------------------------
@@ -118,12 +112,12 @@ else:
         st.session_state.started = False
         rerun()
 
-    ticker = st.session_state.ticker
-    rsi_on = st.session_state.rsi_on
-    bb_on  = st.session_state.bb_on
-    refresh= st.session_state.refresh
+    ticker  = st.session_state.ticker
+    rsi_on  = st.session_state.rsi_on
+    bb_on   = st.session_state.bb_on
+    refresh = st.session_state.refresh
 
-    # fetch & cache new data, but fall back to last one if empty
+    # fetch & fallback
     df_new = get_intraday(ticker)
     if df_new.empty:
         if "last_df" in st.session_state:
@@ -137,7 +131,7 @@ else:
         st.session_state.last_df = df.copy()
         stale = False
 
-    # compute indicators, pattern, first/last
+    # compute everything
     df = compute_indicators(df)
     pattern, idx = detect_pattern(df)
     first = float(df["Close"].iloc[0])
@@ -145,8 +139,8 @@ else:
 
     # — plot —
     fig, (ax1, ax2) = plt.subplots(2,1, figsize=(14,6), sharex=True)
-    price_col = "green" if last >= first else "red"
-    ax1.plot(df.index, df["Close"], color=price_col, label="Price")
+    color = "green" if last >= first else "red"
+    ax1.plot(df.index, df["Close"], color=color, label="Price")
     ax1.plot(df.index, df["Trend"], "--", label="Trend")
     if bb_on:
         ax1.plot(df.index, df["BollingerUpper"], ":", label="Boll Upper")
@@ -167,37 +161,40 @@ else:
     c1, c2 = st.columns([1,3])
     with c1:
         sig = "BUY" if last > first else "SELL"
-        col = "#0a0" if sig=="BUY" else "#a00"
+        bg  = "#0a0" if sig=="BUY" else "#a00"
         st.markdown(
-            f"<div style='background:{col};color:#fff;padding:20px;text-align:center;"
-            f"font-size:24px;font-weight:bold;border-radius:4px'>{sig}</div>",
-            unsafe_allow_html=True,
+            f"<div style='background:{bg};color:#fff;"
+            "padding:20px;text-align:center;font-size:24px;"
+            "font-weight:bold;border-radius:4px'>{sig}</div>",
+            unsafe_allow_html=True
         )
-
-        mkt  = get_market_status()
-        m24  = get_24h_status()
+        mkt = get_market_status()
+        m24 = get_24h_status()
         st.markdown(
-            "<div style='background:#112;color:#dde;padding:10px;border-radius:4px'>"
+            "<div style='background:#112;color:#dde;"
+            "padding:10px;border-radius:4px'>"
             f"⏰ {mkt}<br>─── 24h Markets {m24}</div>",
-            unsafe_allow_html=True,
+            unsafe_allow_html=True
         )
 
     with c2:
-        trend_txt = "rising" if last >= first else "falling"
+        tt = "rising" if last >= first else "falling"
         st.markdown(
-            "<div style='background:#023;color:#eef;padding:12px;border-radius:4px'>"
-            f"<strong>🌟 Trend Detected</strong><br>trend: price is {trend_txt}."
-            "</div>",
-            unsafe_allow_html=True,
+            "<div style='background:#023;color:#eef;"
+            "padding:12px;border-radius:4px'>"
+            f"<strong>🌟 Trend Detected</strong><br>"
+            f"trend: price is {tt}.</div>",
+            unsafe_allow_html=True
         )
-
-        link = "" if pattern=="None" else "🔗"
+        lk = "" if pattern=="None" else "🔗"
         st.markdown(
-            "<div style='background:#432;color:#ffd;padding:12px;border-radius:4px'>"
-            f"<strong>🔍 Pattern Detected {link}</strong><br>"
-            f"pattern: {pattern}.{'' if idx is None else f' (at idx {idx})'}"
+            "<div style='background:#432;color:#ffd;"
+            "padding:12px;border-radius:4px'>"
+            f"<strong>🔍 Pattern Detected {lk}</strong><br>"
+            f"pattern: {pattern}"
+            f"{'' if idx is None else f' (at idx {idx})'}"
             "</div>",
-            unsafe_allow_html=True,
+            unsafe_allow_html=True
         )
 
     st.write(
