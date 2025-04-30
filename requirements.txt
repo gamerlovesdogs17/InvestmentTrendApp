@@ -1,7 +1,6 @@
 streamlit>=1.45.0
-streamlit-autorefresh>=0.2.0
-yfinance>=0.2.25
-pandas>=2.0.0
-numpy>=1.24.0
-matplotlib>=3.7.0
-pytz>=2023.3
+yfinance
+pandas
+numpy
+matplotlib
+pytz
