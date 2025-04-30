@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from datetime import datetime, time
 import pytz
 
-# ----- full-page rerun shim for Streamlit 1.45+ ------------------------------
+# ----- full‐page rerun shim for Streamlit 1.45+ ------------------------------
 try:
     from streamlit.runtime.scriptrunner.script_runner import RerunException
     def rerun():
@@ -20,30 +20,29 @@ except ImportError:
 @st.cache_data(ttl=60)
 def get_intraday(ticker: str) -> pd.DataFrame:
     """
-    Download the last 2 days of 1m bars, then:
-      • If there are bars for today, return those.
-      • Otherwise fall back to the most recent prior day.
+    Download last 2 days of 1m bars, then:
+     • if today’s bars exist → return them
+     • else               → return the last available day
     """
     eastern = pytz.timezone("US/Eastern")
-    now_et = datetime.now(eastern)
-    today = now_et.date()
+    today = datetime.now(eastern).date()
 
-    df = (
-        yf.download(ticker, period="2d", interval="1m", progress=False)
-          .dropna(subset=["Close"])
-    )
-    if df.empty:
-        return df
+    raw = yf.download(ticker, period="2d", interval="1m", progress=False)
+    if raw.empty or "Close" not in raw.columns:
+        return raw  # empty or completely malformed
 
-    # make the index tz-aware in ET
-    df = df.tz_localize("UTC").tz_convert(eastern)
+    # drop any rows full of NaNs
+    raw = raw.dropna(how="all")
 
-    # attempt to pull today's bars
-    df_today = df[df.index.date == today]
-    if not df_today.empty:
-        return df_today
+    # localize tz to ET
+    df = raw.tz_localize("UTC", axis=0).tz_convert(eastern)
 
-    # otherwise fall back to the last available day
+    # pull today’s bars if we have them
+    today_df = df[df.index.date == today]
+    if not today_df.empty:
+        return today_df
+
+    # otherwise fall back to last day available
     last_day = df.index.date.max()
     return df[df.index.date == last_day]
 
@@ -73,7 +72,7 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def detect_pattern(df: pd.DataFrame) -> tuple[str,int|None]:
-    # ← your pattern‐detection goes here (head&shoulders, wedges, etc.)
+    # ← your eight‐pattern detection stub remains here
     return "None", None
 
 
@@ -93,7 +92,6 @@ def get_24h_status() -> str:
     eastern = pytz.timezone("US/Eastern")
     now = datetime.now(eastern)
     wd, t = now.weekday(), now.time()
-    # Sun 20:00 ET – Fri 20:00 ET is “open”
     if wd < 4:
         return "Open"
     if wd == 4:
@@ -105,13 +103,14 @@ def get_24h_status() -> str:
 
 # ----- session_state init ----------------------------------------------------
 
-for k,v in {
+defaults = {
     "started": False,
-    "ticker": "",
-    "rsi_on": True,
-    "bb_on": True,
-    "refresh": 1
-}.items():
+    "ticker":  "",
+    "rsi_on":  True,
+    "bb_on":   True,
+    "refresh": 1,
+}
+for k,v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
@@ -122,7 +121,7 @@ if not st.session_state.started:
     st.title("📈 Intraday Trend & Pattern Scanner")
 
     t_input  = st.text_input("Ticker (e.g. AAPL)", st.session_state.ticker)
-    r_input  = st.checkbox("Show RSI", st.session_state.rsi_on)
+    r_input  = st.checkbox("Show RSI",       st.session_state.rsi_on)
     bb_input = st.checkbox("Show Bollinger Bands", st.session_state.bb_on)
     rf_input = st.slider("Refresh every N minutes", 1, 5, st.session_state.refresh)
 
@@ -150,7 +149,7 @@ else:
     bb_on   = st.session_state.bb_on
     refresh = st.session_state.refresh
 
-    # fetch & fallback
+    # fetch & fall back if needed
     df_new = get_intraday(ticker)
     if df_new.empty:
         if "last_df" in st.session_state:
@@ -164,16 +163,16 @@ else:
         st.session_state.last_df = df.copy()
         stale = False
 
-    # compute everything
+    # indicators, pattern, first/last
     df = compute_indicators(df)
     pattern, idx = detect_pattern(df)
     first = float(df["Close"].iloc[0])
     last  = float(df["Close"].iloc[-1])
 
-    # — plot —
+    # — PLOT —
     fig, (ax1, ax2) = plt.subplots(2,1, figsize=(14,6), sharex=True)
-    price_color = "green" if last >= first else "red"
-    ax1.plot(df.index, df["Close"], color=price_color, label="Price")
+    col = "green" if last >= first else "red"
+    ax1.plot(df.index, df["Close"], color=col, label="Price")
     ax1.plot(df.index, df["Trend"], "--", label="Trend")
     if bb_on:
         ax1.plot(df.index, df["BollingerUpper"], ":", label="Boll Upper")
@@ -190,11 +189,11 @@ else:
 
     st.pyplot(fig, use_container_width=True)
 
-    # — panels —
+    # — PANELS —
     c1, c2 = st.columns([1,3])
     with c1:
-        sig = "BUY" if last > first else "SELL"
-        bg  = "#0a0" if sig=="BUY" else "#a00"
+        sig = "BUY"  if last > first else "SELL"
+        bg  = "#0a0" if sig=="BUY"  else "#a00"
         st.markdown(
             f"<div style='background:{bg};color:#fff;"
             "padding:20px;text-align:center;font-size:24px;"
